@@ -27,6 +27,9 @@ set(_scarlet_dependency_targets
     LibXml2::LibXml2 SQLite3::SQLite3 OpenSSL::SSL OpenSSL::Crypto
     CURL::libcurl LibPSL::LibPSL
 )
+if (USE_WOFF2)
+    list(APPEND _scarlet_dependency_targets WOFF2::common WOFF2::dec Brotli::common Brotli::dec)
+endif ()
 
 function(_scarlet_check_archive _archive)
     if (NOT IS_ABSOLUTE "${_archive}" OR NOT EXISTS "${_archive}" OR NOT _archive MATCHES "\\.a$")

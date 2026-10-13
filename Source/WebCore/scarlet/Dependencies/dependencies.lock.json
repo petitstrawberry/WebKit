@@ -128,14 +128,15 @@
       "version": "2.16.0",
       "source": {
         "git_url": "https://github.com/petitstrawberry/fontconfig.git",
-        "commit": "55ba876e38312707b4557ae9326d71941c9c8443",
+        "commit": "65a1ac12a11bc0dc1272d6d36765569c19736a91",
         "upstream": "fontconfig/fontconfig",
         "upstream_commit": "127bb4dbfca7ba669eb40212ffcf24dd8f30351b",
         "upstream_tag": "2.16.0",
         "kind": "git",
         "branch": "scarlet",
         "changed_source_sha256": {
-          "src/fccompat.c": "5910b0a7b42a9198e7a9116bbce947e6bf86d5b0cf343d722329eae28333a4c3"
+          "src/fccompat.c": "5910b0a7b42a9198e7a9116bbce947e6bf86d5b0cf343d722329eae28333a4c3",
+          "src/fcatomic.c": "b28740f96b3ca5d299a6dbe2b675d89fba53b1cfb1ae5da20951592fdd97a817"
         }
       }
     },
@@ -178,11 +179,16 @@
       "name": "sqlite",
       "version": "3.50.4",
       "source": {
-        "url": "https://www.sqlite.org/2025/sqlite-autoconf-3500400.tar.gz",
-        "sha256": "a3db587a1b92ee5ddac2f66b3edb41b26f9c867275782d46c3a088977d6a5b18",
-        "checksum_basis": "SHA-256 computed from official HTTPS release archive; pinned for reproducibility",
-        "kind": "archive",
-        "filename": "sqlite-autoconf-3500400.tar.gz"
+        "kind": "git",
+        "git_url": "https://github.com/petitstrawberry/sqlite.git",
+        "branch": "scarlet",
+        "commit": "a6a2a07c6537d8745a1d132be084ad84794901bc",
+        "upstream": "sqlite/sqlite",
+        "upstream_commit": "8ed5e7365e6f12f427910188bbf6b254daad2ef6",
+        "upstream_tag": "version-3.50.4",
+        "changed_source_sha256": {
+          "src/os_unix.c": "d3ecff352fdd27fd7a17453e5d6e3efd3fe86852dec970af306073838b352ac4"
+        }
       }
     },
     {

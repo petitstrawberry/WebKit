@@ -158,7 +158,11 @@ bool SQLiteDatabase::open(const String& filename, OpenMode openMode, OptionSet<O
         int result = SQLITE_OK;
         {
             SQLiteTransactionInProgressAutoCounter transactionCounter;
+#if OS(SCARLET)
+            result = sqliteOpen(FileSystem::fileSystemRepresentation(filename), &m_db, flags, "unix-flock"_s);
+#else
             result = sqliteOpen(FileSystem::fileSystemRepresentation(filename), &m_db, flags);
+#endif
 #if PLATFORM(COCOA)
             if (result == SQLITE_OK && options.contains(OpenOptions::CanSuspendWhileLocked))
                 SQLiteFileSystem::setCanSuspendLockedFileAttribute(filename);
@@ -189,8 +193,19 @@ bool SQLiteDatabase::open(const String& filename, OpenMode openMode, OptionSet<O
     }
 
     if (filename != inMemoryPath()) {
+#if OS(SCARLET)
+        // SQLite's flock VFS serializes transactions with native whole-file
+        // locks. Its rollback journal does not require POSIX SHM/range locks.
+        if (openMode != OpenMode::ReadOnly) {
+            auto statement = prepareStatement("PRAGMA journal_mode=DELETE;"_s);
+            if (!statement || statement->step() != SQLITE_ROW
+                || !equalLettersIgnoringASCIICase(statement->columnText(0), "delete"_s))
+                return false;
+        }
+#else
         if (openMode != OpenMode::ReadOnly && !useWALJournalMode())
             return false;
+#endif
 
         auto shmFileName = makeString(filename, "-shm"_s);
         if (FileSystem::fileExists(shmFileName) && !FileSystem::isSafeToUseMemoryMapForPath(shmFileName)) {

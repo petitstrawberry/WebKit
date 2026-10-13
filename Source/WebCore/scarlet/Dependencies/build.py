@@ -645,12 +645,21 @@ pkg_config_path = []
                   f"Libs: -L${{libdir}} {libraries}\nCflags: -I${{includedir}} -DU_STATIC_IMPLEMENTATION\n")
 
     def sqlite(self, source):
+        if (source / "src/os_unix.c").exists():
+            host = self.root / "build/sqlite-host"
+            host.mkdir(parents=True, exist_ok=True)
+            host_env = dict(self.env, CC=self.args.host_cc, CXX=self.args.host_cxx)
+            self.run([source / "configure", "--disable-shared", "--disable-readline"],
+                     "configure-sqlite-host", cwd=host, env=host_env)
+            self.run(["make", "sqlite3.c"], "generate-sqlite-amalgamation", cwd=host, env=host_env)
+            source = host
         adapter = self.control / "sqlite"
         write(adapter / "CMakeLists.txt", f'''cmake_minimum_required(VERSION 3.24)
 project(ScarletSQLite VERSION 3.50.4 LANGUAGES C)
 add_library(sqlite3 STATIC {self.cmake_quote(source / 'sqlite3.c')})
 target_include_directories(sqlite3 PUBLIC {self.cmake_quote(source)})
 target_compile_definitions(sqlite3 PRIVATE SQLITE_OS_UNIX=1 SQLITE_THREADSAFE=1
+    SQLITE_ENABLE_LOCKING_STYLE=1
     SQLITE_OMIT_LOAD_EXTENSION=1 SQLITE_MAX_MMAP_SIZE=0 SQLITE_TEMP_STORE=3
     HAVE_LOCALTIME_R=1 HAVE_GMTIME_R=1 HAVE_PREAD=1 HAVE_PWRITE=1)
 install(TARGETS sqlite3 ARCHIVE DESTINATION lib)

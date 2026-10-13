@@ -27,6 +27,7 @@
 
 #include <WebCore/LocalFrameLoaderClient.h>
 #include <WebCore/FloatRect.h>
+#include <WebCore/IntRect.h>
 #include <wtf/Platform.h>
 #include <wtf/text/WTFString.h>
 
@@ -39,6 +40,8 @@ struct ScarletFrameLoadState {
     bool loading { false };
     bool needsPaint { true };
     bool needsRenderingUpdate { true };
+    bool fullPaint { true };
+    IntRect dirtyRect;
     FloatRect viewport;
     String error;
 };

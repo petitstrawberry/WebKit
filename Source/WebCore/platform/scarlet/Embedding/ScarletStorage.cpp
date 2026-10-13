@@ -11,6 +11,9 @@
 #include "ResourceRequest.h"
 #include "StorageSessionProvider.h"
 #include "WebStorageNamespaceProvider.h"
+#include "DatabaseProvider.h"
+#include "InProcessIDBServer.h"
+#include <wtf/HashMap.h>
 #include <pal/SessionID.h>
 #include <wtf/NeverDestroyed.h>
 #include <wtf/text/MakeString.h>
@@ -117,6 +120,28 @@ void closeScarletStorage()
 Ref<StorageNamespaceProvider> createScarletStorageNamespaceProvider()
 {
     static NeverDestroyed<Ref<StorageNamespaceProvider>> provider(WebKit::WebStorageNamespaceProvider::create(storageDirectory()));
+    return provider.get().copyRef();
+}
+
+class ScarletDatabaseProvider final : public DatabaseProvider {
+public:
+    IDBClient::IDBConnectionToServer& idbConnectionToServerForSession(PAL::SessionID session) final
+    {
+        return m_servers.ensure(session, [session] {
+            if (session.isEphemeral())
+                return InProcessIDBServer::create(session);
+            auto directory = storageDirectory();
+            return InProcessIDBServer::create(session, directory.isEmpty() ? String { }
+                : FileSystem::pathByAppendingComponent(directory, "IndexedDB"_s));
+        }).iterator->value->connectionToServer();
+    }
+private:
+    HashMap<PAL::SessionID, Ref<InProcessIDBServer>> m_servers;
+};
+
+Ref<DatabaseProvider> createScarletDatabaseProvider()
+{
+    static NeverDestroyed<Ref<DatabaseProvider>> provider(adoptRef(*new ScarletDatabaseProvider));
     return provider.get().copyRef();
 }
 }

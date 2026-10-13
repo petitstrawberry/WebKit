@@ -126,7 +126,13 @@ public:
     }
 
 private:
-    void repaint() const { m_state.needsPaint = true; }
+    void repaint() const { m_state.needsPaint = true; m_state.fullPaint = true; }
+    void repaint(const IntRect& rect) const {
+        if (rect.isEmpty())
+            return;
+        m_state.needsPaint = true;
+        m_state.dirtyRect.unite(rect);
+    }
     void unsupported(const String& message) const { recordUnsupported(m_state, message); }
 
     // Page owns the UniqueRef. The host viewport remains alive until Page has
@@ -195,9 +201,9 @@ private:
     std::optional<PointerCharacteristics> pointerCharacteristicsOfPrimaryPointingDevice() const final { return PointerCharacteristics::Fine; }
     OptionSet<PointerCharacteristics> pointerCharacteristicsOfAllAvailablePointingDevices() const final { return PointerCharacteristics::Fine; }
 
-    void invalidateRootView(const IntRect&) final { repaint(); }
-    void invalidateContentsAndRootView(const IntRect&) final { repaint(); }
-    void invalidateContentsForSlowScroll(const IntRect&) final { repaint(); }
+    void invalidateRootView(const IntRect& rect) final { repaint(rect); }
+    void invalidateContentsAndRootView(const IntRect& rect) final { repaint(rect); }
+    void invalidateContentsForSlowScroll(const IntRect& rect) final { repaint(rect); }
     // No native scroll blit is attempted: the host repaints the actual WebCore
     // view at its updated scroll position on the next tick.
     void scroll(const IntSize&, const IntRect&, const IntRect&) final { repaint(); }

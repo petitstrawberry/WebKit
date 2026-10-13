@@ -7,6 +7,8 @@
 #include "ScarletBackForwardClient.h"
 #include "ScarletFrameLoaderClient.h"
 #include "ScarletStorage.h"
+#include "DatabaseProvider.h"
+#include <JavaScriptCore/JSLock.h>
 #include "CookieJar.h"
 #include "StorageNamespaceProvider.h"
 #include "ScarletLiveLoader.h"
@@ -88,6 +90,7 @@ struct ScarletWebView {
     std::string title;
     std::string error;
     std::string inspectedText;
+    SWVPaintStatistics paintStatistics { };
     std::vector<uint8_t> publishedPixels;
 };
 
@@ -175,6 +178,15 @@ int32_t paint(ScarletWebView& view)
     if (frameView->needsLayout() || !frameView->layoutContext().inPaintableState())
         return SWV_EMPTY;
 
+    auto size = cssSize(view);
+    IntRect damage { IntPoint { }, size };
+    if (view.surface && !view.loadState.fullPaint && !view.loadState.dirtyRect.isEmpty())
+        damage.intersect(view.loadState.dirtyRect);
+    view.loadState.needsPaint = false;
+    view.loadState.fullPaint = false;
+    view.loadState.dirtyRect = { };
+    if (damage.isEmpty())
+        return SWV_OK;
     auto surface = view.surface;
     if (!surface)
         surface = adoptRef(cairo_image_surface_create(CAIRO_FORMAT_ARGB32, view.width, view.height));
@@ -185,11 +197,11 @@ int32_t paint(ScarletWebView& view)
     {
         GraphicsContextCairo context(surface.get());
         context.scale(FloatSize { static_cast<float>(view.scale), static_cast<float>(view.scale) });
-        auto size = cssSize(view);
-        context.fillRect(FloatRect { FloatPoint { }, FloatSize { size } }, Color::white);
+        context.clip(FloatRect { damage });
+        context.fillRect(FloatRect { damage }, Color::white);
         // ScrollView::paint applies the actual scroll offset and viewport clip;
         // paintContents alone would incorrectly redraw the document's top.
-        frameView->paint(context, IntRect { IntPoint { }, size });
+        frameView->paint(context, damage);
         if (cairo_status(context.cr()) != CAIRO_STATUS_SUCCESS) {
             view.loadState.error = "WebCore Cairo paint failed."_s;
             return SWV_FAILED;
@@ -202,11 +214,25 @@ int32_t paint(ScarletWebView& view)
     auto stride = cairo_image_surface_get_stride(view.surface.get());
     auto* bytes = cairo_image_surface_get_data(view.surface.get());
     size_t length = static_cast<size_t>(stride) * view.height;
-    if (view.publishedPixels.size() != length || memcmp(view.publishedPixels.data(), bytes, length)) {
-        view.publishedPixels.assign(bytes, bytes + length);
-        ++view.generation;
+    bool changed = view.publishedPixels.size() != length;
+    if (changed)
+        view.publishedPixels.resize(length);
+    FloatRect scaledDamage { damage };
+    scaledDamage.scale(view.scale);
+    auto deviceDamage = enclosingIntRect(scaledDamage);
+    deviceDamage.intersect(IntRect { 0, 0, static_cast<int>(view.width), static_cast<int>(view.height) });
+    ++view.paintStatistics.paints;
+    view.paintStatistics.painted_pixels += static_cast<uint64_t>(deviceDamage.width()) * deviceDamage.height();
+    size_t rowLength = static_cast<size_t>(deviceDamage.width()) * 4;
+    for (int row = deviceDamage.y(); row < deviceDamage.maxY(); ++row) {
+        size_t offset = static_cast<size_t>(row) * stride + static_cast<size_t>(deviceDamage.x()) * 4;
+        if (changed || memcmp(view.publishedPixels.data() + offset, bytes + offset, rowLength)) {
+            changed = true;
+            memcpy(view.publishedPixels.data() + offset, bytes + offset, rowLength);
+        }
     }
-    view.loadState.needsPaint = false;
+    if (changed)
+        ++view.generation;
     return SWV_OK;
 }
 } // namespace
@@ -245,6 +271,13 @@ extern "C" int32_t scarlet_webview_initialize(SWVBytes fontPath)
     }
     initializeScarletLiveStrategies();
     ProcessWarming::prewarmGlobally();
+    {
+        JSC::JSLockHolder locker(commonVM());
+        // notifyNeedTermination only signals the VM. Preallocate its real
+        // termination exception on the owner before publishing the VM; the
+        // minimal embedding does not create a watchdog to do this for us.
+        commonVM().ensureTerminationException();
+    }
     terminationVM = &commonVM();
     initialized = true;
     pthread_mutex_unlock(&initializationMutex);
@@ -315,6 +348,7 @@ extern "C" int32_t scarlet_webview_create(const SWVConfiguration* configuration,
     auto pageConfiguration = pageConfigurationWithEmptyClients(std::nullopt, PAL::SessionID::defaultSessionID());
     pageConfiguration.loadsSubresources = true;
     pageConfiguration.cookieJar = createScarletCookieJar();
+    pageConfiguration.databaseProvider = createScarletDatabaseProvider();
     pageConfiguration.storageNamespaceProvider = createScarletStorageNamespaceProvider();
     pageConfiguration.storageNamespaceProvider->setSessionStorageQuota(5 * 1024 * 1024);
     pageConfiguration.editorClient = createScarletEditorClient();
@@ -512,7 +546,19 @@ extern "C" int32_t scarlet_webview_tick(ScarletWebView* view)
         view->page->updateRendering();
         view->page->finalizeRenderingUpdate({ });
     }
-    return paint(*view);
+    return SWV_OK;
+}
+
+extern "C" int32_t scarlet_webview_needs_paint(ScarletWebView* view, uint32_t* out)
+{
+    auto status = viewStatus(view);
+    if (status != SWV_OK)
+        return status;
+    if (!out)
+        return SWV_INVALID_ARGUMENT;
+    RefPtr frameView = view->frame->view();
+    *out = view->loadState.needsPaint || !view->surface || (frameView && frameView->needsLayout());
+    return SWV_OK;
 }
 
 extern "C" int32_t scarlet_webview_pixels(ScarletWebView* view, SWVPixels* out)
@@ -523,6 +569,9 @@ extern "C" int32_t scarlet_webview_pixels(ScarletWebView* view, SWVPixels* out)
     if (!out)
         return SWV_INVALID_ARGUMENT;
     *out = { };
+    status = paint(*view);
+    if (status != SWV_OK)
+        return status;
     if (!view->surface || view->publishedPixels.empty())
         return SWV_EMPTY;
     auto stride = cairo_image_surface_get_stride(view->surface.get());
@@ -651,7 +700,7 @@ extern "C" int32_t scarlet_webview_key(ScarletWebView* view, const SWVKeyEvent* 
         fromBytes(input->key), fromBytes(input->code), fromBytes(input->key_identifier), static_cast<int>(input->windows_virtual_key),
         !!input->auto_repeat, false, false, modifiers(input->modifiers), MonotonicTime::now() };
     PlatformKeyboardEvent::setCurrentModifierState(modifiers(input->modifiers));
-    view->loadState.needsPaint = true;
+    view->loadState.needsRenderingUpdate = true;
     *handled = view->frame->eventHandler().keyEvent(event);
     return SWV_OK;
 }
@@ -676,8 +725,19 @@ extern "C" int32_t scarlet_webview_complete_request(ScarletWebView* view, const 
         return SWV_INVALID_ARGUMENT;
     auto result = completeScarletLiveRequest(*view->page, *response);
     if (result == SWV_OK || result == SWV_FAILED)
-        view->loadState.needsPaint = true;
+        view->loadState.needsRenderingUpdate = true;
     return result;
+}
+
+extern "C" int32_t scarlet_webview_paint_statistics(ScarletWebView* view, SWVPaintStatistics* out)
+{
+    auto status = viewStatus(view);
+    if (status != SWV_OK)
+        return status;
+    if (!out)
+        return SWV_INVALID_ARGUMENT;
+    *out = view->paintStatistics;
+    return SWV_OK;
 }
 
 extern "C" int32_t scarlet_webview_text_content(ScarletWebView* view, SWVBytes id, SWVBytes* out)

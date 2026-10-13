@@ -104,6 +104,9 @@ int32_t scarlet_webview_forward(ScarletWebView*);
 int32_t scarlet_webview_resize(ScarletWebView*, uint32_t physical_width, uint32_t physical_height, double device_scale_factor);
 int32_t scarlet_webview_focus(ScarletWebView*, uint32_t focused);
 int32_t scarlet_webview_tick(ScarletWebView*); /* Nonblocking native RunLoop cycle + layout/CPU paint. */
+/* Tick advances DOM/rendering lifecycle; pixel acquisition rasterizes pending
+ * damage once, when the host is ready to consume a frame. */
+int32_t scarlet_webview_needs_paint(ScarletWebView*, uint32_t*);
 int32_t scarlet_webview_pixels(ScarletWebView*, SWVPixels*);
 int32_t scarlet_webview_state(ScarletWebView*, SWVState*);
 int32_t scarlet_webview_mouse(ScarletWebView*, const SWVMouseEvent*, uint32_t* handled);
@@ -113,6 +116,9 @@ int32_t scarlet_webview_poll_request(ScarletWebView*, SWVRequest*); /* SWV_EMPTY
 int32_t scarlet_webview_complete_request(ScarletWebView*, const SWVResponse*);
 /* Read-only actual DOM text inspection for embedding smoke tests. */
 int32_t scarlet_webview_text_content(ScarletWebView*, SWVBytes element_id, SWVBytes*);
+/* Actual raster work counters, for embedding performance verification. */
+typedef struct SWVPaintStatistics { uint64_t paints; uint64_t painted_pixels; } SWVPaintStatistics;
+int32_t scarlet_webview_paint_statistics(ScarletWebView*, SWVPaintStatistics*);
 
 #ifdef __cplusplus
 }

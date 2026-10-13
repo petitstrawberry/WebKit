@@ -307,6 +307,10 @@ void ScarletFrameLoaderClient::dispatchDidReceiveTitle(const StringWithDirection
 
 void ScarletFrameLoaderClient::dispatchDidCommitLoad(const std::optional<BackForwardCacheCommitData>&)
 {
+    if (m_frame.isMainFrame()) {
+        m_state.needsPaint = true;
+        m_state.fullPaint = true;
+    }
 }
 
 void ScarletFrameLoaderClient::dispatchDidFailProvisionalLoad(const ResourceError& error, WillContinueLoading, WillInternallyHandleFailure)

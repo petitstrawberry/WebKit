@@ -12,6 +12,9 @@ list(APPEND WebCore_PRIVATE_INCLUDE_DIRECTORIES
     ${WEBCORE_DIR}/rendering/scarlet
 )
 list(APPEND WebCore_LIBRARIES OpenSSL::Crypto)
+if (USE_WOFF2)
+    list(APPEND WebCore_LIBRARIES WOFF2::common Brotli::common Brotli::dec)
+endif ()
 list(APPEND WebCore_SOURCES
     platform/generic/KeyedDecoderGeneric.cpp
     platform/generic/KeyedEncoderGeneric.cpp

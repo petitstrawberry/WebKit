@@ -14,6 +14,7 @@ add_library(ScarletWebView STATIC
     "${CMAKE_CURRENT_LIST_DIR}/ScarletEditorClient.cpp"
     "${CMAKE_CURRENT_LIST_DIR}/ScarletLiveLoader.cpp"
     "${CMAKE_CURRENT_LIST_DIR}/ScarletStorage.cpp"
+    "${CMAKE_SOURCE_DIR}/Source/WebKitLegacy/Storage/InProcessIDBServer.cpp"
     "${CMAKE_SOURCE_DIR}/Source/WebKitLegacy/Storage/WebStorageNamespaceProvider.cpp"
     "${CMAKE_SOURCE_DIR}/Source/WebKitLegacy/Storage/StorageNamespaceImpl.cpp"
     "${CMAKE_SOURCE_DIR}/Source/WebKitLegacy/Storage/StorageAreaImpl.cpp"
@@ -28,6 +29,7 @@ add_library(ScarletWebView STATIC
 # Legacy storage sources normally receive their platform configuration from
 # their parent target. This embedding builds them with WebCore's native config.
 set_source_files_properties(
+    "${CMAKE_SOURCE_DIR}/Source/WebKitLegacy/Storage/InProcessIDBServer.cpp"
     "${CMAKE_SOURCE_DIR}/Source/WebKitLegacy/Storage/WebStorageNamespaceProvider.cpp"
     "${CMAKE_SOURCE_DIR}/Source/WebKitLegacy/Storage/StorageNamespaceImpl.cpp"
     "${CMAKE_SOURCE_DIR}/Source/WebKitLegacy/Storage/StorageAreaImpl.cpp"

@@ -13,7 +13,7 @@ The published Scarlet Git sources are:
 | [Scarlet](https://github.com/petitstrawberry/Scarlet/tree/feature/webkit-native) | `2cb9d3142ffd5d276990f39dc6cce4a939d479b2` | SDK-owned libc, native support and shared-memory ABI |
 | [LLVM](https://github.com/petitstrawberry/llvm-project/tree/scarlet) | `eeab068866d3156b27c937a6979e506daa736e93` | SDK-owned libc++ and libc++abi, LLVM libc utilities |
 | [ICU](https://github.com/petitstrawberry/icu/tree/scarlet) | `49059ce7a1a1c72009c2ebae8f236b0de82100f7` | ICU 78.3 native common/i18n |
-| [Fontconfig](https://github.com/petitstrawberry/fontconfig/tree/scarlet) | `55ba876e38312707b4557ae9326d71941c9c8443` | Fontconfig 2.16.0 native entropy |
+| [Fontconfig](https://github.com/petitstrawberry/fontconfig/tree/scarlet) | `65a1ac12a11bc0dc1272d6d36765569c19736a91` | Fontconfig 2.16.0 native entropy and cache locks |
 | [Curl](https://github.com/petitstrawberry/curl/tree/scarlet) | `bbc8df7c5117ce9fca1674b7de7cdf1ba40b6ff9` | Curl 8.16.0 file-only profile |
 | [libpsl](https://github.com/petitstrawberry/libpsl/tree/feature/optional-tools) | `bc0bf715e47e8786c646f0f4d6e6e15266b72805` | libpsl 0.21.5 without CLI tools |
 
@@ -166,3 +166,8 @@ records each archive's compilation SDK and the SDK compatibility comparison.
 The native dependency build is complete. The dependency audit itself does not
 establish guest execution or WebCore rendering; those require the independent
 native integration tests described above.
+
+SQLite uses the Scarlet fork at `a6a2a07c6537d8745a1d132be084ad84794901bc`
+(upstream 3.50.4). Generate its amalgamation with the host build tools, enable
+`SQLITE_ENABLE_LOCKING_STYLE=1`, and use `unix-flock` with the rollback journal.
+Native whole-file locks remain enforced; this does not use `unix-none`.
