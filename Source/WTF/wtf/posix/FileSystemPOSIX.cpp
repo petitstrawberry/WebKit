@@ -128,11 +128,17 @@ bool fileIDsAreEqual(std::optional<PlatformFileID> a, std::optional<PlatformFile
 
 std::optional<uint32_t> volumeFileBlockSize(const String& path)
 {
+#if OS(SCARLET)
+    // Scarlet's native filesystem ABI has no volume block-size query.
+    UNUSED_PARAM(path);
+    return std::nullopt;
+#else
     struct statvfs fileStat;
     if (!posixStatvfs(fileSystemRepresentation(path), &fileStat))
         return fileStat.f_frsize;
 
     return std::nullopt;
+#endif
 }
 
 #if !USE(CF)
