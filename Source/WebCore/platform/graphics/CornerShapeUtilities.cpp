@@ -23,6 +23,10 @@
  */
 
 #include "config.h"
+#if OS(SCARLET)
+#include <wtf/NeverDestroyed.h>
+#include <wtf/ThreadSpecific.h>
+#endif
 #include "CornerShapeUtilities.h"
 
 #include "FloatPoint.h"
@@ -151,8 +155,18 @@ static double normalizedSuperellipseHalfCorner(double superellipseParameter)
 
     double magnitude = std::abs(superellipseParameter);
 
+#if OS(SCARLET)
+    struct HalfCornerCache {
+        double magnitude { std::numeric_limits<double>::quiet_NaN() };
+        double convexHalfCorner { 0.0 };
+    };
+    static NeverDestroyed<ThreadSpecific<HalfCornerCache, CanBeGCThread::True>> cache;
+    auto& lastMagnitude = cache.get()->magnitude;
+    auto& lastConvexHalfCorner = cache.get()->convexHalfCorner;
+#else
     static thread_local double lastMagnitude = std::numeric_limits<double>::quiet_NaN();
     static thread_local double lastConvexHalfCorner = 0.0;
+#endif
     if (magnitude != lastMagnitude) {
         double exponent = std::pow(0.5, magnitude);
         lastConvexHalfCorner = std::pow(0.5, exponent);
@@ -302,8 +316,18 @@ struct SuperellipseBezierHandles {
 };
 static SuperellipseBezierHandles superellipseBezierHandles(double parameter)
 {
+#if OS(SCARLET)
+    struct BezierCache {
+        double parameter { std::numeric_limits<double>::quiet_NaN() };
+        SuperellipseBezierHandles result { };
+    };
+    static NeverDestroyed<ThreadSpecific<BezierCache, CanBeGCThread::True>> cache;
+    auto& lastParameter = cache.get()->parameter;
+    auto& lastResult = cache.get()->result;
+#else
     static thread_local double lastParameter = std::numeric_limits<double>::quiet_NaN();
     static thread_local SuperellipseBezierHandles lastResult { };
+#endif
     if (parameter == lastParameter)
         return lastResult;
 

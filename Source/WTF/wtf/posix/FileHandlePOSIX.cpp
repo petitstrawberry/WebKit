@@ -179,7 +179,13 @@ std::optional<MappedFileData> FileHandle::map(MappedFileMode mapMode, FileOpenMo
 #endif
     }
 
-    auto fileData = MmapSpan<uint8_t>::mmap(nullptr, size, pageProtection, MAP_FILE | (mapMode == MappedFileMode::Shared ? MAP_SHARED : MAP_PRIVATE), platformHandle());
+    int mappingFlags = mapMode == MappedFileMode::Shared ? MAP_SHARED : MAP_PRIVATE;
+#if !OS(SCARLET)
+    mappingFlags |= MAP_FILE;
+#endif
+    // Scarlet selects a file mapping from the native descriptor, without a
+    // separate legacy MAP_FILE flag.
+    auto fileData = MmapSpan<uint8_t>::mmap(nullptr, size, pageProtection, mappingFlags, platformHandle());
     if (!fileData)
         return { };
 

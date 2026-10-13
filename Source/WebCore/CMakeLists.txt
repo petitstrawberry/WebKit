@@ -3495,3 +3495,7 @@ endif ()
 if (PORT STREQUAL "Scarlet" AND SCARLET_BUILD_RENDERER)
     include("${CMAKE_CURRENT_LIST_DIR}/scarlet/DirectRenderer/ScarletRunner.cmake")
 endif ()
+
+if (PORT STREQUAL "Scarlet" AND SCARLET_BUILD_EMBEDDING)
+    include("${CMAKE_CURRENT_LIST_DIR}/platform/scarlet/Embedding/ScarletWebView.cmake")
+endif ()

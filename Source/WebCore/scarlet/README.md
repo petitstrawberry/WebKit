@@ -58,5 +58,29 @@ synthetic verifier tests as documented in `DirectRenderer/tests/README.md`.
 Those host tests are protocol checks; native execution, native child status,
 source provenance and window presentation require independent guest evidence.
 
+The persistent `ScarletWebView` C ABI is selected with
+`-DSCARLET_BUILD_EMBEDDING=ON`. It owns actual WebCore Page/frame/navigation,
+RunLoop, event delivery and Cairo painting on one engine thread. Its HTTP
+request/completion API delegates byte transport to the embedding host while
+WebCore retains loader, redirect and security checks. The generated
+`build-scarlet/ScarletWebView.link` contains one raw LLD argument per line for
+the final Rust executable, without a CRT or `main` object. The closure selects
+a fixed-address ELF with `--no-pie`, matching its native dependency archives.
+The engine library does not supply a process entry point or interpreter; the
+embedding frontend owns startup and any native Scarlet loader integration.
+Installation places
+the public header in `include`, the static engine archives in `lib`, and a
+manifest with installed engine paths in `share/scarlet/ScarletWebView.link`.
+The native SDK and dependency producer prefixes remain explicit inputs.
+The embedding is experimental. Infinite-script shutdown failed in earlier
+native runtime checks and still requires revalidation with the current build;
+cross-thread termination is not yet a proven cancellation path. A successful
+engine or frontend link does not establish live-site GUI compatibility.
+Scarlet defaults to full static archives, and the embedding requires
+`USE_THIN_ARCHIVES=OFF` so installed engine libraries retain their actual objects.
+The installed manifest retains their absolute archive paths; it is developer
+link metadata rather than a standalone SDK bundle. After relocating those
+producer prefixes, reconfigure and reinstall to regenerate the manifest.
+
 No logs, generated headers, build caches, dependency binaries or personal host
 paths are stored in this port source tree.

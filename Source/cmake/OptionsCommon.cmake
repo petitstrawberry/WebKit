@@ -157,7 +157,7 @@ endif ()
 
 # Prefer thin archives by default if they can be both created by the
 # archiver and read back by the linker.
-if (AR_SUPPORTS_THIN_ARCHIVES AND LD_SUPPORTS_THIN_ARCHIVES)
+if (AR_SUPPORTS_THIN_ARCHIVES AND LD_SUPPORTS_THIN_ARCHIVES AND NOT PORT STREQUAL "Scarlet")
     set(USE_THIN_ARCHIVES_DEFAULT ON)
 else ()
     set(USE_THIN_ARCHIVES_DEFAULT OFF)

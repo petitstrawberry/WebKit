@@ -77,6 +77,10 @@
 #include "VMTrapsInlines.h"
 #include <wtf/NeverDestroyed.h>
 #include <wtf/StringPrintStream.h>
+#if OS(SCARLET)
+#include <cstdio>
+#include <cstdlib>
+#endif
 
 WTF_ALLOW_UNSAFE_BUFFER_USAGE_BEGIN
 
@@ -2326,7 +2330,19 @@ LLINT_SLOW_PATH_DECL(slow_path_handle_traps)
 {
     LLINT_BEGIN_NO_SET_PC();
     ASSERT(vm.traps().needHandling(VMTraps::AsyncEvents));
+#if OS(SCARLET)
+    bool diagnostics = std::getenv("SCARLET_GC_DIAGNOSTICS");
+    if (diagnostics)
+        std::printf("SCARLET_CLOOP_TRAP stage=handler-before vm=%p pending=%u deferring_termination=%u\n",
+            &vm, static_cast<unsigned>(vm.traps().hasTrapBit(VMTraps::NeedTermination)),
+            static_cast<unsigned>(vm.traps().isDeferringTermination()));
+#endif
     vm.traps().handleTraps(VMTraps::AsyncEvents);
+#if OS(SCARLET)
+    if (diagnostics)
+        std::printf("SCARLET_CLOOP_TRAP stage=handler-after vm=%p pending=%u exception=%p\n",
+            &vm, static_cast<unsigned>(vm.traps().hasTrapBit(VMTraps::NeedTermination)), throwScope.exception());
+#endif
     UNUSED_PARAM(pc);
     LLINT_RETURN_TWO(throwScope.exception(), globalObject);
 }

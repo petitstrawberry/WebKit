@@ -1,0 +1,268 @@
+{
+  "schema_version": 1,
+  "target": "aarch64-unknown-scarlet",
+  "profile": "static-cpu-offline",
+  "source_policy": {
+    "immutable_pins": true,
+    "apply_local_patches": false,
+    "copy_source_overlays": false,
+    "target_headers_and_libraries": "Scarlet SDK and this native dependency prefix only"
+  },
+  "sdk": {
+    "toolchain": "share/scarlet/cmake/aarch64-scarlet.cmake",
+    "c_driver": "bin/aarch64-scarlet-clang",
+    "cxx_driver": "bin/aarch64-scarlet-clang++",
+    "owned_archives": [
+      "lib/libscarlet_c.a",
+      "lib/libc++.a",
+      "lib/libc++abi.a",
+      "lib/libscarlet_cxx_support.a",
+      "lib/libscarlet_c_startup.a",
+      "lib/libscarlet_webcore_native_memory.a"
+    ],
+    "llvm_source": {
+      "kind": "git",
+      "git_url": "https://github.com/petitstrawberry/llvm-project.git",
+      "branch": "scarlet",
+      "commit": "eeab068866d3156b27c937a6979e506daa736e93",
+      "version": "21.1.8",
+      "ownership": "Built and installed by the Scarlet SDK; this dependency recipe never builds or copies the C/C++ runtime."
+    },
+    "scarlet_source": {
+      "kind": "git",
+      "git_url": "https://github.com/petitstrawberry/Scarlet.git",
+      "branch": "feature/webkit-native",
+      "commit": "2cb9d3142ffd5d276990f39dc6cce4a939d479b2",
+      "ownership": "Built and installed by the Scarlet SDK; owns native libc, CXXSupport, CStartup and the WebCore shared-memory ABI."
+    }
+  },
+  "icu_data": {
+    "kind": "archive",
+    "url": "https://github.com/unicode-org/icu/releases/download/release-78.3/icu4c-78.3-sources.tgz",
+    "filename": "icu4c-78.3-sources.tgz",
+    "sha256": "3a2e7a47604ba702f345878308e6fefeca612ee895cf4a5f222e7955fabfe0c0",
+    "member": "icu/source/data/in/icudt78l.dat",
+    "payload_sha256": "d5cf2a40dccbe471781ec7af85693bff542ff12f0b670c9630c4e72d60714b8b",
+    "symbol": "icudt78_dat",
+    "checksum_basis": "Archive matches official GitHub release-asset SHA-256; payload SHA-256 verified against the exact official archive member."
+  },
+  "dependencies": [
+    {
+      "name": "icu",
+      "version": "78.3",
+      "source": {
+        "git_url": "https://github.com/petitstrawberry/icu.git",
+        "commit": "49059ce7a1a1c72009c2ebae8f236b0de82100f7",
+        "upstream": "unicode-org/icu",
+        "upstream_commit": "21d1eb0f306e1141c10931e914dfc038c06121da",
+        "upstream_tag": "release-78.3",
+        "kind": "git",
+        "branch": "scarlet",
+        "changed_source_sha256": {
+          "icu4c/source/acinclude.m4": "e8e9e719c10fa1263b29b633703156752045dce65a1518b683352fd1dd8f0754",
+          "icu4c/source/config.sub": "697e2bf0a7fc03d7bc9c9795c4f20af8bae783bdee1aea794107aec94dc4bbb6",
+          "icu4c/source/config/mh-scarlet": "c3b3eefcdac9a42dce38838f41607423e187170610d93ef075936b9e69421f39",
+          "icu4c/source/configure": "d909037daad7d292ffeaa3b762f5ab8271a87d2f56ec8f49ce6590c6bfecf57e",
+          "icu4c/source/i18n/decContext.h": "ee0f0b126236d1f24dec9c9555fa1ce373065d8e715d0a7ef7096e800d397751"
+        }
+      }
+    },
+    {
+      "name": "zlib",
+      "version": "1.3.1",
+      "source": {
+        "url": "https://zlib.net/fossils/zlib-1.3.1.tar.gz",
+        "sha256": "9a93b2b7dfdac77ceba5a558a580e74667dd6fede4585b91eefb60f03b72df23",
+        "checksum_basis": "SHA-256 computed from official HTTPS release archive; pinned for reproducibility",
+        "kind": "archive",
+        "filename": "zlib-1.3.1.tar.gz"
+      }
+    },
+    {
+      "name": "libpng",
+      "version": "1.6.50",
+      "source": {
+        "url": "https://download.sourceforge.net/libpng/libpng-1.6.50.tar.xz",
+        "sha256": "4df396518620a7aa3651443e87d1b2862e4e88cad135a8b93423e01706232307",
+        "checksum_basis": "SHA-256 computed from official HTTPS release archive; pinned for reproducibility",
+        "kind": "archive",
+        "filename": "libpng-1.6.50.tar.xz"
+      }
+    },
+    {
+      "name": "freetype",
+      "version": "2.14.1",
+      "source": {
+        "url": "https://download.savannah.gnu.org/releases/freetype/freetype-2.14.1.tar.xz",
+        "sha256": "32427e8c471ac095853212a37aef816c60b42052d4d9e48230bab3bdf2936ccc",
+        "checksum_basis": "SHA-256 computed from official HTTPS release archive; pinned for reproducibility",
+        "kind": "archive",
+        "filename": "freetype-2.14.1.tar.xz"
+      }
+    },
+    {
+      "name": "expat",
+      "version": "2.7.3",
+      "source": {
+        "url": "https://github.com/libexpat/libexpat/releases/download/R_2_7_3/expat-2.7.3.tar.xz",
+        "sha256": "71df8f40706a7bb0a80a5367079ea75d91da4f8c65c58ec59bcdfbf7decdab9f",
+        "checksum_basis": "Verified against official GitHub release-asset SHA-256 digest",
+        "upstream_checksum_url": "https://api.github.com/repos/libexpat/libexpat/releases/249794450",
+        "kind": "archive",
+        "filename": "expat-2.7.3.tar.xz"
+      }
+    },
+    {
+      "name": "pixman",
+      "version": "0.46.4",
+      "source": {
+        "url": "https://cairographics.org/releases/pixman-0.46.4.tar.xz",
+        "sha256": "a098c33924754ad43f981b740f6d576c70f9ed1006e12221b1845431ebce1239",
+        "checksum_basis": "SHA-256 computed from official HTTPS release archive; pinned for reproducibility",
+        "kind": "archive",
+        "filename": "pixman-0.46.4.tar.xz"
+      }
+    },
+    {
+      "name": "fontconfig",
+      "version": "2.16.0",
+      "source": {
+        "git_url": "https://github.com/petitstrawberry/fontconfig.git",
+        "commit": "55ba876e38312707b4557ae9326d71941c9c8443",
+        "upstream": "fontconfig/fontconfig",
+        "upstream_commit": "127bb4dbfca7ba669eb40212ffcf24dd8f30351b",
+        "upstream_tag": "2.16.0",
+        "kind": "git",
+        "branch": "scarlet",
+        "changed_source_sha256": {
+          "src/fccompat.c": "5910b0a7b42a9198e7a9116bbce947e6bf86d5b0cf343d722329eae28333a4c3"
+        }
+      }
+    },
+    {
+      "name": "cairo",
+      "version": "1.18.6",
+      "source": {
+        "url": "https://cairographics.org/releases/cairo-1.18.6.tar.xz",
+        "sha256": "1c767308174337a74694da0f3ec069c271452163a1ef4540964c50c301f157d4",
+        "checksum_basis": "Verified against official release-announcement SHA-256 digest",
+        "upstream_checksum_url": "https://cairographics.org/news/cairo-1.18.6/",
+        "kind": "archive",
+        "filename": "cairo-1.18.6.tar.xz"
+      }
+    },
+    {
+      "name": "harfbuzz",
+      "version": "11.5.1",
+      "source": {
+        "url": "https://github.com/harfbuzz/harfbuzz/releases/download/11.5.1/harfbuzz-11.5.1.tar.xz",
+        "sha256": "972a60a8d274d49e70361da6920c3a73dfb0fb4387f6c6811906a47ba634d8a1",
+        "checksum_basis": "Verified against official GitHub release-asset SHA-256 digest",
+        "upstream_checksum_url": "https://api.github.com/repos/harfbuzz/harfbuzz/releases/249105896",
+        "kind": "archive",
+        "filename": "harfbuzz-11.5.1.tar.xz"
+      }
+    },
+    {
+      "name": "libxml2",
+      "version": "2.14.6",
+      "source": {
+        "url": "https://download.gnome.org/sources/libxml2/2.14/libxml2-2.14.6.tar.xz",
+        "sha256": "7ce458a0affeb83f0b55f1f4f9e0e55735dbfc1a9de124ee86fb4a66b597203a",
+        "checksum_basis": "SHA-256 computed from official HTTPS release archive; pinned for reproducibility",
+        "kind": "archive",
+        "filename": "libxml2-2.14.6.tar.xz"
+      }
+    },
+    {
+      "name": "sqlite",
+      "version": "3.50.4",
+      "source": {
+        "url": "https://www.sqlite.org/2025/sqlite-autoconf-3500400.tar.gz",
+        "sha256": "a3db587a1b92ee5ddac2f66b3edb41b26f9c867275782d46c3a088977d6a5b18",
+        "checksum_basis": "SHA-256 computed from official HTTPS release archive; pinned for reproducibility",
+        "kind": "archive",
+        "filename": "sqlite-autoconf-3500400.tar.gz"
+      }
+    },
+    {
+      "name": "libjpeg-turbo",
+      "version": "3.1.2",
+      "source": {
+        "url": "https://github.com/libjpeg-turbo/libjpeg-turbo/releases/download/3.1.2/libjpeg-turbo-3.1.2.tar.gz",
+        "sha256": "8f0012234b464ce50890c490f18194f913a7b1f4e6a03d6644179fa0f867d0cf",
+        "checksum_basis": "SHA-256 computed from official HTTPS release archive; pinned for reproducibility",
+        "kind": "archive",
+        "filename": "libjpeg-turbo-3.1.2.tar.gz"
+      }
+    },
+    {
+      "name": "libwebp",
+      "version": "1.6.0",
+      "source": {
+        "url": "https://storage.googleapis.com/downloads.webmproject.org/releases/webp/libwebp-1.6.0.tar.gz",
+        "sha256": "e4ab7009bf0629fd11982d4c2aa83964cf244cffba7347ecd39019a9e38c4564",
+        "checksum_basis": "SHA-256 computed from official HTTPS release archive; pinned for reproducibility",
+        "kind": "archive",
+        "filename": "libwebp-1.6.0.tar.gz"
+      }
+    },
+    {
+      "name": "curl",
+      "version": "8.16.0",
+      "source": {
+        "git_url": "https://github.com/petitstrawberry/curl.git",
+        "commit": "bbc8df7c5117ce9fca1674b7de7cdf1ba40b6ff9",
+        "upstream": "curl/curl",
+        "upstream_commit": "11b991232fbcaa88e2b1faecac224416b0001e35",
+        "upstream_tag": "curl-8_16_0",
+        "kind": "git",
+        "branch": "scarlet",
+        "changed_source_sha256": {
+          "lib/curl_setup.h": "a081aa9adede79e233937212d450420f42186c80ad8c599cb8cb91623e94f77d",
+          "lib/hostip.c": "b9673b1d519dd476e48b5732de46b2d439da67140d0f8865cec1375bdb4ebda0",
+          "lib/hostip.h": "59dcdc4cce7afb2b2d2184c1cf99314a7f5627adbb63fe5e725654983899b4d6",
+          "lib/socketpair.h": "3c04c887bccfab2f04d547cfa89e3eaae85505a8c2b3aeaaeeef58214ed2ade4",
+          "lib/transfer.c": "4fe0ecd3f2e37e4d95ae5d79c23047da09e78d651b23e3fdb7fc389ac0eaf02a"
+        }
+      }
+    },
+    {
+      "name": "libpsl",
+      "version": "0.21.5",
+      "source": {
+        "git_url": "https://github.com/petitstrawberry/libpsl.git",
+        "commit": "bc0bf715e47e8786c646f0f4d6e6e15266b72805",
+        "upstream": "rockdaboot/libpsl",
+        "upstream_commit": "ba4c49a205408845834b1648ad23c15ee09f722b",
+        "upstream_tag": "0.21.5",
+        "kind": "git",
+        "branch": "feature/optional-tools",
+        "changed_source_sha256": {
+          "meson.build": "efb5be9be8a9ad0dd48036bf1db283e158c2253e6646fe0fb4918552c797300b",
+          "meson_options.txt": "bf17922068d03eaef5ae1c45e38f1803936128701a2bff0670ae18c463ff2637"
+        },
+        "submodules": [
+          {
+            "path": "list",
+            "git_url": "https://github.com/publicsuffix/list.git",
+            "commit": "5db9b65997e3c9230ac4353b01994c2ae9667cb9",
+            "public_suffix_list_sha256": "8a99ee709c83a545413c0ad81033681696fddd3ed2b7296d9a88a11235fe5c6f",
+            "same_as_pinned_release_archive": true
+          }
+        ]
+      }
+    },
+    {
+      "name": "openssl",
+      "version": "3.5.8",
+      "source": {
+        "url": "https://github.com/openssl/openssl/releases/download/openssl-3.5.8/openssl-3.5.8.tar.gz",
+        "sha256": "a8f84a39918ec6415ce765d9b429d313ba97b8143169c172e734b9514464f5b2",
+        "checksum_basis": "SHA-256 computed from official HTTPS release archive; pinned for reproducibility",
+        "kind": "archive",
+        "filename": "openssl-3.5.8.tar.gz"
+      }
+    }
+  ]
+}

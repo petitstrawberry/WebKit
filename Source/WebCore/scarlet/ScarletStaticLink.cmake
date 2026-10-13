@@ -92,9 +92,6 @@ set(_scarlet_private_archives
     "${SCARLET_CXX_RUNTIME_SUPPORT_LIBRARY}"
     "${SCARLET_NATIVE_MEMORY_LIBRARY}"
 )
-if (SCARLET_ADDITIONAL_RUNTIME_LIBRARIES)
-    list(APPEND _scarlet_private_archives ${SCARLET_ADDITIONAL_RUNTIME_LIBRARIES})
-endif ()
 list(REMOVE_DUPLICATES _scarlet_private_archives)
 foreach (_archive IN LISTS _scarlet_private_archives)
     _scarlet_check_archive("${_archive}")

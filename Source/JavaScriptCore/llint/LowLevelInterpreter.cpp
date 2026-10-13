@@ -42,6 +42,11 @@
 #include "SuperSampler.h"
 #include <wtf/Assertions.h>
 #include <wtf/MathExtras.h>
+#if OS(SCARLET)
+#include <cstdio>
+#include <cstdlib>
+#include <string_view>
+#endif
 
 using namespace JSC::LLInt;
 
@@ -373,6 +378,32 @@ JSValue CLoop::execute(OpcodeID entryOpcodeID, void* executableAddress, VM* vm, 
 #define RECORD_OPCODE_STATS(__opcode)
 #endif
 
+#if OS(SCARLET)
+    bool scarletTrapDiagnostics = std::getenv("SCARLET_GC_DIAGNOSTICS");
+    bool scarletLoggedTrapPoll { false };
+    bool scarletLoggedPendingTrap { false };
+    if (scarletTrapDiagnostics)
+        std::printf("SCARLET_CLOOP_TRAP stage=entry vm=%p trap_bits=%p\n", vm, vm->traps().trapBitsAddress());
+#define SCARLET_RECORD_TRAP_POLL(__opcode) \
+    do { \
+        if constexpr (std::string_view { #__opcode } == "op_check_traps" || std::string_view { #__opcode } == "op_check_traps_wide16" || std::string_view { #__opcode } == "op_check_traps_wide32") { \
+            if (scarletTrapDiagnostics) { \
+                auto& frameVM = cfr.callFrame()->codeBlock()->vm(); \
+                bool pending = frameVM.traps().hasTrapBit(VMTraps::NeedTermination); \
+                if (!scarletLoggedTrapPoll || (pending && !scarletLoggedPendingTrap)) { \
+                    std::printf("SCARLET_CLOOP_TRAP stage=poll vm=%p trap_bits=%p pending=%u deferring_termination=%u\n", \
+                        &frameVM, frameVM.traps().trapBitsAddress(), static_cast<unsigned>(pending), \
+                        static_cast<unsigned>(frameVM.traps().isDeferringTermination())); \
+                    scarletLoggedTrapPoll = true; \
+                    scarletLoggedPendingTrap |= pending; \
+                } \
+            } \
+        } \
+    } while (false)
+#else
+#define SCARLET_RECORD_TRAP_POLL(__opcode)
+#endif
+
 #if ENABLE(COMPUTED_GOTO_OPCODES)
 
     //========================================================================
@@ -382,7 +413,8 @@ JSValue CLoop::execute(OpcodeID entryOpcodeID, void* executableAddress, VM* vm, 
 
     #define DEFINE_OPCODE(__opcode) \
         __opcode: \
-            RECORD_OPCODE_STATS(__opcode);
+            RECORD_OPCODE_STATS(__opcode); \
+            SCARLET_RECORD_TRAP_POLL(__opcode);
 
     // Dispatch to the current PC's bytecode:
     DISPATCH_OPCODE();
@@ -396,7 +428,8 @@ JSValue CLoop::execute(OpcodeID entryOpcodeID, void* executableAddress, VM* vm, 
     #define DEFINE_OPCODE(__opcode) \
         case __opcode: \
         __opcode: \
-            RECORD_OPCODE_STATS(__opcode);
+            RECORD_OPCODE_STATS(__opcode); \
+            SCARLET_RECORD_TRAP_POLL(__opcode);
 
     // Dispatch to the current PC's bytecode:
     dispatchOpcode:
@@ -443,6 +476,7 @@ JSValue CLoop::execute(OpcodeID entryOpcodeID, void* executableAddress, VM* vm, 
 #endif
 
     #undef DEFINE_OPCODE
+    #undef SCARLET_RECORD_TRAP_POLL
     #undef CHECK_FOR_TIMEOUT
     #undef CAST
 

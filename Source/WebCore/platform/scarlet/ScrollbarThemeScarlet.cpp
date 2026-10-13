@@ -31,7 +31,9 @@ namespace WebCore {
 
 // The single-frame CPU renderer deliberately has no scrollbar UI. The upstream
 // base theme has zero thickness, no hit targets, and paint() returns false. Page
-// construction must also set both scrollbar modes to AlwaysOff.
+// The direct renderer sets both modes to AlwaysOff. A persistent view enables
+// the real Auto scrollbar models for wheel/default scrolling while the CPU
+// theme continues to provide no visual scrollbar controls.
 ScrollbarTheme& ScrollbarTheme::nativeTheme()
 {
     static NeverDestroyed<ScrollbarTheme> theme;
