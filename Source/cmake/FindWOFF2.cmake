@@ -89,7 +89,7 @@ endif ()
 if ("dec" IN_LIST WOFF2_FIND_COMPONENTS)
     pkg_check_modules(PC_WOFF2_DEC QUIET libwoff2dec)
 
-    find_path(WOFF2_INCLUDE_DIR
+    find_path(WOFF2_DEC_INCLUDE_DIR
         NAMES woff2/decode.h
         HINTS ${PC_WOFF2_DEC_INCLUDEDIR} ${PC_WOFF2_DEC_INCLUDE_DIRS}
     )
@@ -164,5 +164,5 @@ mark_as_advanced(
 
 if (WOFF2_FOUND)
     set(WOFF2_LIBRARIES ${WOFF2_LIBRARY} ${WOFF2_DEC_LIBRARY})
-    set(WOFF2_INCLUDE_DIRS ${WOFF2_INCLUDE_DIR})
+    set(WOFF2_INCLUDE_DIRS ${WOFF2_DEC_INCLUDE_DIR})
 endif ()

@@ -13,7 +13,7 @@ list(APPEND WebCore_PRIVATE_INCLUDE_DIRECTORIES
 )
 list(APPEND WebCore_LIBRARIES OpenSSL::Crypto)
 if (USE_WOFF2)
-    list(APPEND WebCore_LIBRARIES WOFF2::common Brotli::common Brotli::dec)
+    list(APPEND WebCore_LIBRARIES WOFF2::common WOFF2::dec Brotli::common Brotli::dec)
 endif ()
 list(APPEND WebCore_SOURCES
     platform/generic/KeyedDecoderGeneric.cpp
