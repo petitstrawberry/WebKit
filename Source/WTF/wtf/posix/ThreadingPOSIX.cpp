@@ -73,7 +73,7 @@
 #endif
 #endif
 
-#if !OS(DARWIN) && OS(UNIX)
+#if !OS(DARWIN) && !OS(SCARLET) && OS(UNIX)
 
 #include <semaphore.h>
 #include <sys/mman.h>
@@ -99,7 +99,7 @@ namespace WTF {
 
 Thread::~Thread() = default;
 
-#if !OS(DARWIN)
+#if !OS(DARWIN) && !OS(SCARLET)
 class Semaphore final {
     WTF_MAKE_NONCOPYABLE(Semaphore);
     WTF_DEPRECATED_MAKE_FAST_ALLOCATED(Semaphore);
@@ -194,6 +194,7 @@ void Thread::signalHandlerSuspendResume(int, siginfo_t*, void* ucontext)
 
 void Thread::initializePlatformThreading()
 {
+#if !OS(SCARLET)
     if (!g_wtfConfig.isUserSpecifiedThreadSuspendResumeSignalConfigured) {
         g_wtfConfig.sigThreadSuspendResume = SIGUSR1;
         if (const char* string = getenv("JSC_SIGNAL_FOR_GC")) {
@@ -206,7 +207,7 @@ WTF_ALLOW_UNSAFE_BUFFER_USAGE_END
     }
     g_wtfConfig.isThreadSuspendResumeSignalConfigured = true;
 
-#if !OS(DARWIN)
+#if !OS(DARWIN) && !OS(SCARLET)
     globalSemaphoreForSuspendResume.construct(0);
 
     // Signal handlers are process global configuration.
@@ -236,6 +237,7 @@ WTF_ALLOW_UNSAFE_BUFFER_USAGE_END
     bool signalIsInstalled = attemptToSetSignal(g_wtfConfig.sigThreadSuspendResume);
     RELEASE_ASSERT(signalIsInstalled);
 #endif
+#endif
 }
 
 #if OS(LINUX)
@@ -247,7 +249,7 @@ ThreadIdentifier Thread::currentID()
 
 void Thread::initializeCurrentThreadEvenIfNonWTFCreated()
 {
-#if !OS(DARWIN)
+#if !OS(DARWIN) && !OS(SCARLET)
     RELEASE_ASSERT(g_wtfConfig.isThreadSuspendResumeSignalConfigured);
     sigset_t mask;
     sigemptyset(&mask);
@@ -369,7 +371,12 @@ bool Thread::establishHandle(NewThreadContext& context, StackAllocationSpecifica
         break;
     case StackAllocationSpecification::Kind::SizeAndLocation: {
         auto bounds = stackSpec.stackSpan();
+#if OS(SCARLET)
+        UNUSED_PARAM(bounds);
+        int result = ENOTSUP;
+#else
         int result = pthread_attr_setstack(&attr, bounds.data(), bounds.size_bytes());
+#endif
         if (result) {
             LOG_ERROR("Failed to set custom stack at %p size %zu: %s",
                 bounds.data(), bounds.size_bytes(), safeStrerror(result));
@@ -568,8 +575,13 @@ bool Thread::signal(int signalNumber)
     Locker locker { m_mutex };
     if (hasExited())
         return false;
+#if OS(SCARLET)
+    UNUSED_PARAM(signalNumber);
+    return false; // POSIX signal numbers have no native Scarlet mapping.
+#else
     int errNo = pthread_kill(m_handle, signalNumber);
     return !errNo; // A 0 errNo means success.
+#endif
 }
 
 auto Thread::suspend(const ThreadSuspendLocker&) -> std::expected<void, PlatformSuspendError>
@@ -579,6 +591,13 @@ auto Thread::suspend(const ThreadSuspendLocker&) -> std::expected<void, Platform
     kern_return_t result = thread_suspend(m_platformThread);
     if (result != KERN_SUCCESS)
         return makeUnexpected(result);
+    return { };
+#elif OS(SCARLET)
+    if (!m_suspendCount) {
+        int result = scarlet_gc_suspend(m_handle, &m_platformRegisters);
+        if (result) return makeUnexpected(result);
+    }
+    ++m_suspendCount;
     return { };
 #else
     if (!m_suspendCount) {
@@ -606,6 +625,12 @@ void Thread::resume(const ThreadSuspendLocker&)
 {
 #if OS(DARWIN)
     thread_resume(m_platformThread);
+#elif OS(SCARLET)
+    RELEASE_ASSERT(m_suspendCount);
+    if (!--m_suspendCount) {
+        RELEASE_ASSERT(!scarlet_gc_resume(m_handle));
+        m_platformRegisters = nullptr;
+    }
 #else
     if (m_suspendCount == 1) {
         // When allowing sigThreadSuspendResume interrupt in the signal handler by sigsuspend and SigThreadSuspendResume is actually issued,

@@ -50,7 +50,7 @@
 #if PLATFORM(COCOA)
 #include <wtf/spi/cocoa/MachVMSPI.h>
 #include <mach/mach.h>
-#elif OS(LINUX)
+#elif OS(LINUX) || OS(SCARLET)
 #include <sys/mman.h>
 #endif
 
@@ -224,7 +224,7 @@ void permanentlyFreezePages(void* base, size_t size, FreezePagePermission permis
 
     // There's no going back now!
     result = vm_protect(mach_task_self(), reinterpret_cast<vm_address_t>(base), size, UpdateMaximumPermission, permission == FreezePagePermission::ReadOnly ? VM_PROT_READ : VM_PROT_NONE);
-#elif OS(LINUX)
+#elif OS(LINUX) || OS(SCARLET)
     result = mprotect(base, size, permission == FreezePagePermission::ReadOnly ? PROT_READ : PROT_NONE);
 #else
     // FIXME: Implement equivalent for Windows, maybe with VirtualProtect.

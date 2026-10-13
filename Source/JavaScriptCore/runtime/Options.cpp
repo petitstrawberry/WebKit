@@ -36,6 +36,10 @@
 #include <mutex>
 #include <stdlib.h>
 #include <string.h>
+#if OS(SCARLET)
+#include <strings.h>
+#include <errno.h>
+#endif
 #include <wtf/ASCIICType.h>
 #include <wtf/BitSet.h>
 #include <wtf/Compiler.h>
@@ -215,42 +219,77 @@ std::optional<OptionsStorage::Bool> parse(const char* string)
     return std::nullopt;
 }
 
+#if OS(SCARLET)
+template<typename T> static std::optional<T> parseNativeOption(const char* string)
+{
+    errno = 0;
+    char* end;
+    if constexpr (std::is_floating_point_v<T>) {
+        double value = strtod(string, &end);
+        if (end != string && errno != ERANGE) return value;
+    } else if constexpr (std::is_signed_v<T>) {
+        long value = strtol(string, &end, 10);
+        if (end != string && errno != ERANGE && value >= std::numeric_limits<T>::min() && value <= std::numeric_limits<T>::max()) return static_cast<T>(value);
+    } else {
+        unsigned long value = strtoul(string, &end, 10);
+        if (end != string && errno != ERANGE && value <= std::numeric_limits<T>::max()) return static_cast<T>(value);
+    }
+    return std::nullopt;
+}
+#endif
+
 template<>
 std::optional<OptionsStorage::Int32> parse(const char* string)
 {
+#if OS(SCARLET)
+    return parseNativeOption<OptionsStorage::Int32>(string);
+#else
     int32_t value;
     if (sscanf(string, "%d", &value) == 1)
         return value;
     return std::nullopt;
+#endif
 }
 
 template<>
 std::optional<OptionsStorage::Unsigned> parse(const char* string)
 {
+#if OS(SCARLET)
+    return parseNativeOption<OptionsStorage::Unsigned>(string);
+#else
     unsigned value;
     if (sscanf(string, "%u", &value) == 1)
         return value;
     return std::nullopt;
+#endif
 }
 
 #if CPU(ADDRESS64) || OS(DARWIN) || OS(HAIKU)
 template<>
 std::optional<OptionsStorage::Size> parse(const char* string)
 {
+#if OS(SCARLET)
+    return parseNativeOption<OptionsStorage::Size>(string);
+#else
     size_t value;
     if (sscanf(string, "%zu", &value) == 1)
         return value;
     return std::nullopt;
+#endif
 }
 #endif // CPU(ADDRESS64) || OS(DARWIN) || OS(HAIKU)
 
 template<>
 std::optional<OptionsStorage::Double> parse(const char* string)
 {
+#if OS(SCARLET)
+    return parseNativeOption<OptionsStorage::Double>(string);
+#else
     double value;
     if (sscanf(string, "%lf", &value) == 1)
         return value;
     return std::nullopt;
+#endif
 }
 
 template<>
@@ -491,7 +530,23 @@ bool OptionRange::init(const char* rangeString)
         p++;
     }
 
+#if OS(SCARLET)
+    char* end;
+    auto low = parseNativeOption<unsigned>(p);
+    int scanResult = low ? 1 : 0;
+    if (low) {
+        m_lowLimit = *low;
+        strtoul(p, &end, 10);
+        if (*end == ':') {
+            if (auto high = parseNativeOption<unsigned>(end + 1)) {
+                m_highLimit = *high;
+                scanResult = 2;
+            }
+        }
+    }
+#else
     int scanResult = sscanf(p, " %u:%u", &m_lowLimit, &m_highLimit);
+#endif
 
     if (!scanResult || scanResult == EOF) {
         m_state = InitError;

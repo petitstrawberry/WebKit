@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>Native Scarlet WebCore proof</title>
+<style>
+  * { box-sizing: border-box; }
+  html { background: #eef2f6; color: #182c44; font: 18px/1.5 sans-serif; }
+  body { margin: 0; padding: 24px; }
+  h1 { margin: 0 0 12px; font-size: 28px; line-height: 1.25; }
+  #label { display: inline-block; margin: 0 0 16px; color: #314b65; }
+  #probe { width: 320px; padding: 16px; border: 4px solid #183850; background: #80c9e8; }
+  #probe p { margin: 0; }
+  #flow { width: 100%; margin: 18px 0; padding: 10px; border: 2px solid #58677a; background: #fff; }
+  #tiles { display: flex; gap: 12px; }
+  .tile { flex: 1; min-width: 0; padding: 12px; border-radius: 7px; background: #e4eacc; }
+  .tile:nth-child(2) { background: #f8dfc5; }
+  #script-marker { font: 13px/1.5 monospace; margin-top: 16px; }
+</style>
+<body>
+<h1>Scarlet · native WebCore</h1>
+<div id="label">HTML → CSS → layout → Cairo</div>
+<section id="probe"><p id="probe-text">This real CSS box wraps its text inside a measured border. 日本語も表示。</p></section>
+<p id="flow">Viewport reflow proof: this sentence has enough words to occupy more lines in a narrow native window than in a wide one. Changing the viewport must change the measured height of this paragraph, while the fixed-width CSS box remains the same width.</p>
+<div id="tiles"><div id="tile-a" class="tile">Flex item A</div><div class="tile">Flex item B</div></div>
+<div id="script-marker">script-disabled</div>
+</body>
+</html>

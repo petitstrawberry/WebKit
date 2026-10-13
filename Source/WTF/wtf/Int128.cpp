@@ -127,6 +127,7 @@ UInt128Impl operator%(UInt128Impl lhs, UInt128Impl rhs) {
   return remainder;
 }
 
+#if !OS(SCARLET) // ostream formatting is not part of this no-localization runtime.
 namespace {
 
 static std::string UInt128ToFormattedString(UInt128Impl v, std::ios_base::fmtflags flags) {
@@ -197,6 +198,8 @@ std::ostream& operator<<(std::ostream& os, UInt128Impl v) {
   return os << rep;
 }
 
+#endif
+
 namespace {
 
 static UInt128Impl NODELETE UnsignedAbsoluteValue(Int128Impl v) {
@@ -255,6 +258,7 @@ Int128Impl operator%(Int128Impl lhs, Int128Impl rhs) {
                     UInt128Low64(remainder));
 }
 
+#if !OS(SCARLET)
 std::ostream& operator<<(std::ostream& os, Int128Impl v) {
   std::ios_base::fmtflags flags = os.flags();
   std::string rep;
@@ -299,6 +303,7 @@ std::ostream& operator<<(std::ostream& os, Int128Impl v) {
 
   return os << rep;
 }
+#endif
 
 void printInternal(PrintStream& out, UInt128 value)
 {

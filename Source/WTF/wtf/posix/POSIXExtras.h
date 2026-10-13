@@ -39,7 +39,7 @@
 #include <unistd.h>
 #endif
 
-#if OS(UNIX) && !PLATFORM(PLAYSTATION)
+#if OS(UNIX) && !PLATFORM(PLAYSTATION) && !OS(SCARLET)
 #include <dlfcn.h>
 #include <sys/mman.h>
 #endif
@@ -131,7 +131,7 @@ inline int posixStatx(int directoryFileDescriptor, UTF8CStringView path, int fla
 }
 #endif
 
-#if !PLATFORM(PLAYSTATION)
+#if !PLATFORM(PLAYSTATION) && !OS(SCARLET)
 [[nodiscard]] inline void* posixDlopen(UTF8CStringView path, int mode)
 {
     return dlopen(path.utf8(), mode);
@@ -173,7 +173,7 @@ using WTF::posixChflags;
 #if OS(LINUX) && HAVE(STATX)
 using WTF::posixStatx;
 #endif
-#if !PLATFORM(PLAYSTATION)
+#if !PLATFORM(PLAYSTATION) && !OS(SCARLET)
 using WTF::posixDlopen;
 using WTF::posixShmOpen;
 using WTF::posixShmUnlink;

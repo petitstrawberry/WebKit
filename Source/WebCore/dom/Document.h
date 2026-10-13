@@ -2933,9 +2933,13 @@ private:
 
 inline AXObjectCache* Document::existingAXObjectCache() const
 {
+#if PLATFORM(SCARLET) && !ENABLE(ACCESSIBILITY)
+    return nullptr;
+#else
     if (!hasEverCreatedAnAXObjectCache)
         return nullptr;
     return existingAXObjectCacheSlow();
+#endif
 }
 
 inline bool Document::hasBrowsingContext() const

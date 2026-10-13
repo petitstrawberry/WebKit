@@ -2289,7 +2289,7 @@ if (USE_ANGLE_EGL)
     )
 elseif (USE_LIBEPOXY)
     list(APPEND WebCore_LIBRARIES Epoxy::Epoxy)
-else ()
+elseif (NOT PORT STREQUAL "Scarlet")
     list(APPEND WebCore_LIBRARIES OpenGL::GLES)
 
     list(APPEND WebCore_SYSTEM_INCLUDE_DIRECTORIES
@@ -3489,4 +3489,9 @@ if (${WebCore_LIBRARY_TYPE} MATCHES "SHARED")
         set_target_properties(WebCore PROPERTIES VERSION ${PROJECT_VERSION} SOVERSION ${PROJECT_VERSION_MAJOR})
     endif ()
     install(TARGETS WebCore DESTINATION "${LIB_INSTALL_DIR}")
+endif ()
+
+# Native CPU renderer, sharing this exact engine configuration.
+if (PORT STREQUAL "Scarlet" AND SCARLET_BUILD_RENDERER)
+    include("${CMAKE_CURRENT_LIST_DIR}/scarlet/DirectRenderer/ScarletRunner.cmake")
 endif ()

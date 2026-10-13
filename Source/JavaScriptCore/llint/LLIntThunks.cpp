@@ -41,6 +41,9 @@
 #include "WasmCallingConvention.h"
 #include "WasmContext.h"
 #include <wtf/NeverDestroyed.h>
+#if OS(SCARLET)
+#include <atomic>
+#endif
 
 namespace JSC {
 
@@ -908,8 +911,24 @@ DEFINE_IPINT_THUNK_FOR_CATCH(inPlaceInterpreterTableCatchAllrefEntryThunk, ipint
 #if ENABLE(C_LOOP)
 // Non-JIT (i.e. C Loop LLINT) case:
 
+#if OS(SCARLET)
+// Actual native JavaScript bytecode entries, separate from WebCore's
+// conservative scriptExecutionCount permission/reentrancy checks. All C-loop
+// program/call/construct/eval/module/cached-call/microtask entries use this gate;
+// native callbacks do not. Keep other ports and all execution semantics intact.
+static std::atomic<uint64_t> scarletJavaScriptExecutionEntries { 0 };
+
+extern "C" uint64_t scarlet_jsc_execution_entry_count()
+{
+    return scarletJavaScriptExecutionEntries.load(std::memory_order_relaxed);
+}
+#endif
+
 EncodedJSValue vmEntryToJavaScript(void* executableAddress, VM* vm, ProtoCallFrame* protoCallFrame)
 {
+#if OS(SCARLET)
+    scarletJavaScriptExecutionEntries.fetch_add(1, std::memory_order_relaxed);
+#endif
     JSValue result = CLoop::execute(llint_vm_entry_to_javascript, executableAddress, vm, protoCallFrame);
     return JSValue::encode(result);
 }

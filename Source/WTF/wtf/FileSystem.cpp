@@ -58,7 +58,9 @@ namespace WTF::FileSystemImpl {
 
 static std::filesystem::path toStdFileSystemPath(StringView path)
 {
-#if HAVE(MISSING_U8STRING)
+#if OS(SCARLET)
+    return { std::string(reinterpret_cast<const char*>(path.utf8().data())) };
+#elif HAVE(MISSING_U8STRING)
 ALLOW_DEPRECATED_DECLARATIONS_BEGIN
     return std::filesystem::u8path(path.utf8().data());
 ALLOW_DEPRECATED_DECLARATIONS_END
@@ -328,6 +330,12 @@ std::optional<MappedFileData> mapFile(const String& filePath, MappedFileMode mod
 
 MappedFileData createMappedFileData(const String& path, size_t bytesSize, FileHandle* outputHandle)
 {
+#if OS(SCARLET)
+    // Writable mapped-file cache requires a native writeback contract.
+    // It is deliberately unavailable in this interpreter experiment.
+    UNUSED_PARAM(path); UNUSED_PARAM(bytesSize); UNUSED_PARAM(outputHandle);
+    return { };
+#else
     constexpr bool failIfFileExists = true;
     auto handle = FileSystem::openFile(path, FileSystem::FileOpenMode::ReadWrite, FileSystem::FileAccessPermission::User, { }, failIfFileExists);
 
@@ -368,6 +376,7 @@ MappedFileData createMappedFileData(const String& path, size_t bytesSize, FileHa
 
     succeeded = true;
     return WTF::move(*mappedFile);
+#endif
 }
 
 void finalizeMappedFileData(MappedFileData& mappedFileData, size_t bytesSize)
@@ -382,7 +391,11 @@ void finalizeMappedFileData(MappedFileData& mappedFileData, size_t bytesSize)
     mprotect(map, bytesSize, PROT_READ);
 
     // Flush (asynchronously) to file, turning this into clean memory.
+#if OS(SCARLET)
+    RELEASE_ASSERT_NOT_REACHED(); // createMappedFileData rejects this operation.
+#else
     msync(map, bytesSize, MS_ASYNC);
+#endif
 #endif
 }
 

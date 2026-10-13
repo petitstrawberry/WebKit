@@ -84,7 +84,9 @@ bool Lock::tryLockWithTimeout(Seconds timeout)
     unsigned maxRetries = (timeout < Seconds::infinity()) ? timeout.value() : std::numeric_limits<unsigned>::max();
     unsigned tryCount = 0;
     while (!tryLock() && tryCount++ <= maxRetries) {
-#if OS(WINDOWS)
+#if OS(SCARLET)
+        scarlet_native_call(20, 1000000000, 0, 0, 0, 0);
+#elif OS(WINDOWS)
         Sleep(1000);
 #else
         ::sleep(1);

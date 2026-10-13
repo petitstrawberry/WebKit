@@ -288,6 +288,13 @@ bool tryVmZeroAndPurgeMTECase(void* p, size_t vmSize, VMTag usage);
 inline void vmZeroAndPurge(void* p, size_t vmSize, VMTag usage)
 {
     vmValidate(p, vmSize);
+#if defined(__scarlet__)
+    // Do not replace VM mappings owned by Scarlet's Rust allocator.
+    // The initial port zeroes retained backing without reclaiming it.
+    BUNUSED_PARAM(usage);
+    memset(p, 0, vmSize);
+    return;
+#endif
     int flags = MAP_PRIVATE | MAP_ANON | MAP_FIXED | BMALLOC_NORESERVE;
     int tag = vmTagFd(usage);
 #if BMALLOC_USE_MADV_ZERO
@@ -319,7 +326,11 @@ inline void vmZeroAndPurge(void* p, size_t vmSize, VMTag usage)
 inline void vmDeallocatePhysicalPages(void* p, size_t vmSize)
 {
     vmValidatePhysical(p, vmSize);
-#if BOS(DARWIN)
+#if defined(__scarlet__)
+    // MADV_DONTNEED retains an accessible zero-fill mapping. Preserve that
+    // behavior while retaining physical backing in this initial port.
+    memset(p, 0, vmSize);
+#elif BOS(DARWIN)
     SYSCALL(madvise(p, vmSize, MADV_FREE_REUSABLE));
 #elif BOS(FREEBSD)
     SYSCALL(madvise(p, vmSize, MADV_FREE));
@@ -334,7 +345,9 @@ inline void vmDeallocatePhysicalPages(void* p, size_t vmSize)
 inline void vmAllocatePhysicalPages(void* p, size_t vmSize)
 {
     vmValidatePhysical(p, vmSize);
-#if BOS(DARWIN)
+#if defined(__scarlet__)
+    SYSCALL(mprotect(p, vmSize, PROT_READ | PROT_WRITE));
+#elif BOS(DARWIN)
     BUNUSED_PARAM(p);
     BUNUSED_PARAM(vmSize);
     // For the Darwin platform, we don't need to call madvise(..., MADV_FREE_REUSE)

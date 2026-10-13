@@ -176,3 +176,8 @@ if (USE_LIBBACKTRACE)
         LIBBACKTRACE::LIBBACKTRACE
     )
 endif ()
+
+if (CMAKE_SYSTEM_NAME STREQUAL "Scarlet")
+    list(REMOVE_ITEM WTF_SOURCES posix/CPUTimePOSIX.cpp)
+    list(APPEND WTF_SOURCES scarlet-CPUTime.cpp)
+endif ()

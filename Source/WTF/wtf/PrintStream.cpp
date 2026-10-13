@@ -203,7 +203,11 @@ void printInternal(PrintStream& out, unsigned char value)
 
 void printInternal(PrintStream& out, char16_t value)
 {
+#if OS(SCARLET)
+    out.printf("U+%04X", static_cast<unsigned>(value));
+#else
     out.printf("%lc", static_cast<wint_t>(value));
+#endif
 }
 
 void printInternal(PrintStream& out, char32_t value)

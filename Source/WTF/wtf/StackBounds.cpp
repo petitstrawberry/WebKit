@@ -19,6 +19,9 @@
  */
 
 #include "config.h"
+#if OS(SCARLET)
+#include <wtf/scarlet/NativeThreadGC.h>
+#endif
 #include <wtf/StackBounds.h>
 
 #if OS(DARWIN)
@@ -91,6 +94,15 @@ WTF_ALLOW_UNSAFE_BUFFER_USAGE_BEGIN
     void* origin = static_cast<char*>(bound) + tls->__stacksize;
 WTF_ALLOW_UNSAFE_BUFFER_USAGE_END
     return StackBounds { origin, bound };
+}
+
+#elif OS(SCARLET)
+
+StackBounds StackBounds::currentThreadStackBoundsInternal()
+{
+    void* low; void* high;
+    RELEASE_ASSERT(!scarlet_gc_stack_bounds(&low, &high));
+    return StackBounds { high, low };
 }
 
 #elif OS(UNIX) || OS(HAIKU)

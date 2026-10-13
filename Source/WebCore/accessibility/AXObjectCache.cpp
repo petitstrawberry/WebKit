@@ -260,6 +260,11 @@ void AXObjectCache::setSyncModeToOtherProcessesCallback(SyncModeToOtherProcesses
 
 std::optional<AccessibilityMode> resolveAccessibilityModeTransition(AccessibilityMode current, AccessibilityMode requested)
 {
+#if PLATFORM(SCARLET) && !ENABLE(ACCESSIBILITY)
+    RELEASE_ASSERT_WITH_MESSAGE(isAccessibilityModeOff(current) && isAccessibilityModeOff(requested),
+        "Scarlet native accessibility mode transitions are unavailable");
+    return std::nullopt;
+#else
 #if !ENABLE(ACCESSIBILITY_ISOLATED_TREE)
     if (requested == AccessibilityMode::AXThread)
         requested = AccessibilityMode::MainThread;
@@ -288,6 +293,7 @@ std::optional<AccessibilityMode> resolveAccessibilityModeTransition(Accessibilit
 
     // Default to disallowing the transition.
     return std::nullopt;
+#endif
 }
 
 enum class ShouldSyncToOtherProcesses : bool { No, Yes };
@@ -391,16 +397,24 @@ std::optional<AccessibilityMode> AXObjectCache::transitionToAXThreadModeIfNeeded
 bool AXObjectCache::accessibilityEnhancedUserInterfaceEnabled()
 {
     AX_ASSERT(isMainThread());
+#if PLATFORM(SCARLET) && !ENABLE(ACCESSIBILITY)
+    return false;
+#else
     return gAccessibilityEnhancedUserInterfaceEnabled;
+#endif
 }
 
 void AXObjectCache::setEnhancedUserInterfaceAccessibility(bool flag)
 {
     AX_ASSERT(isMainThread());
+#if PLATFORM(SCARLET) && !ENABLE(ACCESSIBILITY)
+    RELEASE_ASSERT_WITH_MESSAGE(!flag, "Scarlet native accessibility cannot be enabled");
+#else
     gAccessibilityEnhancedUserInterfaceEnabled = flag;
 #if PLATFORM(MAC)
     if (flag)
         enableAccessibility();
+#endif
 #endif
 }
 
@@ -444,6 +458,9 @@ AXObjectCache::AXObjectCache(LocalFrame& localFrame, Document* document)
     , m_updateTreeSnapshotTimer(*this, &AXObjectCache::updateTreeSnapshotTimerFired)
 #endif
 {
+#if PLATFORM(SCARLET) && !ENABLE(ACCESSIBILITY)
+    RELEASE_ASSERT_NOT_REACHED_WITH_MESSAGE("Scarlet native accessibility cache construction is unavailable");
+#endif
     AXTRACE(makeString("AXObjectCache::AXObjectCache 0x"_s, hex(reinterpret_cast<uintptr_t>(this))));
 #ifndef NDEBUG
     AXLOG(makeString("frameID "_s, m_frameID.loggingString()));

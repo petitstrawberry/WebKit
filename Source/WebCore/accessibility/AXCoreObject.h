@@ -1406,12 +1406,23 @@ public:
     virtual void mathPrescripts(AccessibilityMathMultiscriptPairs&) = 0;
     virtual void mathPostscripts(AccessibilityMathMultiscriptPairs&) = 0;
 
+#if PLATFORM(SCARLET)
+#if ENABLE(ACCESSIBILITY)
+#error "Scarlet accessibility wrappers are unavailable"
+#endif
+    // The offline CPU profile has no native accessibility wrapper. Clear and
+    // query operations preserve that state; installing one is unsupported.
+    AccessibilityObjectWrapper* wrapper() const { return nullptr; }
+    void setWrapper(AccessibilityObjectWrapper* wrapper) { RELEASE_ASSERT(!wrapper); }
+    void setWrapperFrom(const AXCoreObject& other) { RELEASE_ASSERT(!other.wrapper()); }
+#else
     AccessibilityObjectWrapper* wrapper() const { return m_wrapper.get(); }
 #if PLATFORM(COCOA)
     WEBCORE_EXPORT RetainPtr<id> platformElement() const;
 #endif
     void setWrapper(AccessibilityObjectWrapper* wrapper) { m_wrapper = wrapper; }
     void setWrapperFrom(const AXCoreObject& other) { m_wrapper = other.m_wrapper; }
+#endif
     void detachWrapper(AccessibilityDetachmentType);
 
 #if PLATFORM(IOS_FAMILY)
@@ -1682,7 +1693,9 @@ inline void AXCoreObject::detach(AccessibilityDetachmentType detachmentType)
 inline void AXCoreObject::detachWrapper(AccessibilityDetachmentType detachmentType)
 {
     detachPlatformWrapper(detachmentType);
+#if !PLATFORM(SCARLET)
     m_wrapper = nullptr;
+#endif
 }
 
 inline Vector<AXID> AXCoreObject::childrenIDs(bool updateChildrenIfNeeded)

@@ -534,7 +534,14 @@ public:
     WEBCORE_EXPORT static void disableAccessibilityForTesting();
     WEBCORE_EXPORT static std::optional<AccessibilityMode> attemptMainThreadModeTransition();
     WEBCORE_EXPORT static std::atomic<AccessibilityMode> gAccessibilityMode;
-    static AccessibilityMode accessibilityMode() { return gAccessibilityMode.load(std::memory_order_relaxed); }
+    static AccessibilityMode accessibilityMode()
+    {
+#if PLATFORM(SCARLET) && !ENABLE(ACCESSIBILITY)
+        return AccessibilityMode::Off;
+#else
+        return gAccessibilityMode.load(std::memory_order_relaxed);
+#endif
+    }
 #if ENABLE(ACCESSIBILITY_ISOLATED_TREE)
     WEBCORE_EXPORT static std::optional<AccessibilityMode> transitionToAXThreadModeIfNeeded(AXThreadModePreconditions = AXThreadModePreconditions::RequireClientAndSetting);
     WEBCORE_EXPORT static bool shouldForceAccessibilityEnabled();
@@ -1245,11 +1252,18 @@ private:
 
 inline bool AXObjectCache::accessibilityEnabled()
 {
+#if PLATFORM(SCARLET) && !ENABLE(ACCESSIBILITY)
+    return false;
+#else
     return !isAccessibilityModeOff(accessibilityMode());
+#endif
 }
 
 inline void AXObjectCache::enableAccessibility([[maybe_unused]] AXThreadModePreconditions preconditions)
 {
+#if PLATFORM(SCARLET) && !ENABLE(ACCESSIBILITY)
+    RELEASE_ASSERT_NOT_REACHED_WITH_MESSAGE("Scarlet native accessibility cannot be enabled");
+#else
     if (accessibilityMode() == AccessibilityMode::AXThread) {
         // If we're in AXThread mode, there's nothing more to do.
 #if !ENABLE(ACCESSIBILITY_ISOLATED_TREE)
@@ -1266,6 +1280,7 @@ inline void AXObjectCache::enableAccessibility([[maybe_unused]] AXThreadModePrec
     // various factors (e.g. feature flags, system defaults), so make sure
     // we move to MainThread mode at a minimum.
     std::ignore = attemptMainThreadModeTransition();
+#endif
 }
 
 inline bool AXObjectCache::forceDeferredSpellChecking()

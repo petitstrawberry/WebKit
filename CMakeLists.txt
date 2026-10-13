@@ -9,12 +9,19 @@
 cmake_minimum_required(VERSION 3.20)
 set(CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/Source/cmake")
 
-if (CMAKE_HOST_SYSTEM_NAME STREQUAL "Darwin")
+if (CMAKE_HOST_SYSTEM_NAME STREQUAL "Darwin" AND NOT PORT STREQUAL "Scarlet")
     # Resolve the SDK and pin tools before the call to project().
     include(WebKitXcodeSDK)
 endif ()
 
 project(WebKit LANGUAGES C CXX)
+
+if (PORT STREQUAL "Scarlet")
+    if (NOT CMAKE_ASM_COMPILER)
+        set(CMAKE_ASM_COMPILER "${CMAKE_C_COMPILER}" CACHE FILEPATH "Scarlet native assembler")
+    endif ()
+    enable_language(ASM)
+endif ()
 
 # project() enables C and CXX; see WEBKIT_ENABLE_LANGUAGE for why this is reset.
 set(CMAKE_PCH_PROLOGUE "")

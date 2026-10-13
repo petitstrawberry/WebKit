@@ -28,6 +28,7 @@
 #ifdef __cplusplus
 
 #include "BPlatform.h"
+#include <cstdlib>
 
 BALLOW_UNSAFE_BUFFER_USAGE_BEGIN
 

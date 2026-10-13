@@ -481,14 +481,14 @@ const Cursor& grabbingCursor()
     return c;
 }
 
-#if !HAVE(NSCURSOR) && !PLATFORM(WIN)
+#if !HAVE(NSCURSOR) && !PLATFORM(WIN) && !PLATFORM(SCARLET)
 void Cursor::ensurePlatformCursor() const
 {
     notImplemented();
 }
 #endif
 
-#if !HAVE(NSCURSOR)
+#if !HAVE(NSCURSOR) && !PLATFORM(SCARLET)
 void Cursor::setAsPlatformCursor() const
 {
     notImplemented();

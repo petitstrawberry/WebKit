@@ -88,6 +88,10 @@ static size_t computeAvailableMemory()
     if (!sysinfo(&info))
         return info.totalram * info.mem_unit;
     return availableMemoryGuess;
+#elif OS(SCARLET)
+    // Conservative allocation heuristic for the 1 GiB experimental guest.
+    // This is a budget, not a claim about physical RAM reported by the OS.
+    return 256 * MB;
 #elif OS(UNIX) || OS(HAIKU)
     long pages = sysconf(_SC_PHYS_PAGES);
     long pageSize = sysconf(_SC_PAGE_SIZE);

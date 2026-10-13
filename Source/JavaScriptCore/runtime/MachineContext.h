@@ -138,7 +138,11 @@ inline T stackPointer(const PlatformRegisters& regs)
 template<typename T>
 inline T stackPointer(const PlatformRegisters& regs)
 {
+#if OS(SCARLET)
+    return std::bit_cast<T>(regs.sp);
+#else
     return std::bit_cast<T>(regs.stackPointer);
+#endif
 }
 #endif // OS(WINDOWS) || HAVE(MACHINE_CONTEXT)
 

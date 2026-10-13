@@ -55,7 +55,9 @@
 
 #include <setjmp.h>
 
+#if !OS(SCARLET)
 #include <signal.h>
+#endif
 #include <stdarg.h>
 #include <stddef.h>
 #include <stdio.h>

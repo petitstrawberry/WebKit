@@ -29,7 +29,9 @@
 #include <wtf/Platform.h>
 #include <wtf/StdLibExtras.h>
 
-#if OS(DARWIN)
+#if OS(SCARLET)
+#include <wtf/scarlet/NativeThreadGC.h>
+#elif OS(DARWIN)
 #include <mach/exception_types.h>
 #include <mach/thread_act.h>
 #include <signal.h>
@@ -45,7 +47,9 @@ typedef ucontext_t mcontext_t;
 
 namespace WTF {
 
-#if OS(DARWIN)
+#if OS(SCARLET)
+using PlatformRegisters = ScarletGCRegisters;
+#elif OS(DARWIN)
 
 #if CPU(X86)
 typedef i386_thread_state_t PlatformRegisters;

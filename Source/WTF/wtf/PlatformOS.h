@@ -38,6 +38,11 @@
 #include <TargetConditionals.h>
 #endif
 
+#if defined(__scarlet__)
+#define WTF_OS_SCARLET 1
+#define WTF_OS_UNIX 1
+#endif
+
 /* OS() - underlying operating system; only to be used for mandated low-level services like
    virtual memory, not to choose a GUI toolkit */
 #define OS(WTF_FEATURE) (defined WTF_OS_##WTF_FEATURE && WTF_OS_##WTF_FEATURE)

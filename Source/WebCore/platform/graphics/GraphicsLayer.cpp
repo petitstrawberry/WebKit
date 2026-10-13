@@ -130,7 +130,7 @@ static RepaintMap& NODELETE repaintRectMap()
     return map;
 }
 
-#if !USE(CA) && !USE(COORDINATED_GRAPHICS)
+#if !USE(CA) && !USE(COORDINATED_GRAPHICS) && !PLATFORM(SCARLET)
 bool GraphicsLayer::supportsLayerType(Type type)
 {
     switch (type) {

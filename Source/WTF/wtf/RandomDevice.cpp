@@ -26,6 +26,9 @@
 
 #include "config.h"
 #include <wtf/RandomDevice.h>
+#if OS(SCARLET)
+#include <sys/random.h>
+#endif
 
 #include <stdlib.h>
 
@@ -63,7 +66,7 @@ NEVER_INLINE NO_RETURN_DUE_TO_CRASH static void crashUnableToReadFromURandom()
 }
 #endif
 
-#if !OS(DARWIN) && !OS(FUCHSIA) && !OS(WINDOWS)
+#if !OS(DARWIN) && !OS(FUCHSIA) && !OS(WINDOWS) && !OS(SCARLET)
 RandomDevice::RandomDevice()
 {
     int ret = 0;
@@ -76,7 +79,7 @@ RandomDevice::RandomDevice()
 }
 #endif
 
-#if !OS(DARWIN) && !OS(FUCHSIA) && !OS(WINDOWS)
+#if !OS(DARWIN) && !OS(FUCHSIA) && !OS(WINDOWS) && !OS(SCARLET)
 RandomDevice::~RandomDevice()
 {
     close(m_fd);
@@ -91,6 +94,13 @@ void RandomDevice::cryptographicallyRandomValues(std::span<uint8_t> buffer)
     RELEASE_ASSERT(!CCRandomGenerateBytes(buffer.data(), buffer.size()));
 #elif OS(FUCHSIA)
     zx_cprng_draw(buffer.data(), buffer.size());
+#elif OS(SCARLET)
+    size_t done = 0;
+    while (done < buffer.size()) {
+        auto n = getrandom(buffer.data() + done, buffer.size() - done, 0);
+        RELEASE_ASSERT(n > 0);
+        done += n;
+    }
 #elif OS(UNIX)
     ssize_t amountRead = 0;
     while (static_cast<size_t>(amountRead) < buffer.size()) {

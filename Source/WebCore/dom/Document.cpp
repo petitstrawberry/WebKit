@@ -3930,6 +3930,11 @@ AXObjectCache* Document::existingAXObjectCacheSlow() const
 
 AXObjectCache* Document::axObjectCache() const
 {
+#if PLATFORM(SCARLET) && !ENABLE(ACCESSIBILITY)
+    // There is no native accessibility service in the offline CPU profile.
+    // Do not construct concrete AX objects merely because generic code asks.
+    return nullptr;
+#else
     if (!AXObjectCache::accessibilityEnabled())
         return nullptr;
 
@@ -3954,6 +3959,7 @@ AXObjectCache* Document::axObjectCache() const
     m_axObjectCache = makeUnique<AXObjectCache>(*m_frame, const_cast<Document*>(this));
     Document::hasEverCreatedAnAXObjectCache = true;
     return m_axObjectCache.get();
+#endif
 }
 
 void Document::setVisuallyOrdered()

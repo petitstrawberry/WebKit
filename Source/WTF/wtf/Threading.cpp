@@ -205,6 +205,9 @@ const char* Thread::normalizeThreadName(const char* threadName)
 
 void Thread::initializeInThread()
 {
+#if OS(SCARLET)
+    RELEASE_ASSERT(!scarlet_gc_register_current());
+#endif
     if (m_stack.isEmpty())
         m_stack = StackBounds::currentThreadStackBounds();
     m_savedLastStackTop = stack().origin();

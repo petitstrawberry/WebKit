@@ -36,6 +36,10 @@
 #include <wtf/unix/UnixFileDescriptor.h>
 #endif
 
+#if PLATFORM(SCARLET)
+#include "ScarletSharedMemoryHandle.h"
+#endif
+
 #if OS(WINDOWS)
 #include <wtf/win/Win32Handle.h>
 #endif
@@ -62,7 +66,9 @@ WEBCORE_EXPORT bool isMemoryAttributionDisabled();
 class SharedMemoryHandle {
 public:
     using Type =
-#if USE(UNIX_DOMAIN_SOCKETS)
+#if PLATFORM(SCARLET)
+        ScarletSharedMemoryHandle;
+#elif USE(UNIX_DOMAIN_SOCKETS)
         UnixFileDescriptor;
 #elif OS(DARWIN)
         MachSendRight;
@@ -158,7 +164,9 @@ private:
     Protection m_protection;
 #endif
 
-#if USE(UNIX_DOMAIN_SOCKETS)
+#if PLATFORM(SCARLET)
+    ScarletSharedMemoryHandle m_scarletHandle;
+#elif USE(UNIX_DOMAIN_SOCKETS)
     UnixFileDescriptor m_fileDescriptor;
     bool m_isWrappingMap { false };
 #elif OS(DARWIN)

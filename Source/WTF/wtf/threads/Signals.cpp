@@ -26,7 +26,7 @@
 #include "config.h"
 #include <wtf/threads/Signals.h>
 
-#if OS(UNIX)
+#if OS(UNIX) && !OS(SCARLET)
 
 #if HAVE(MACH_EXCEPTIONS)
 extern "C" {
@@ -600,3 +600,14 @@ void SignalHandlers::finalize()
 } // namespace WTF
 
 #endif // OS(UNIX)
+
+#if OS(SCARLET)
+#include <wtf/WTFConfig.h>
+namespace WTF {
+void SignalHandlers::initialize() { g_wtfConfig.signalHandlers.initState = InitState::Initializing; }
+void SignalHandlers::finalize() { g_wtfConfig.signalHandlers.initState = InitState::Finalized; }
+void SignalHandlers::add(Signal, SignalHandler&&) { RELEASE_ASSERT_NOT_REACHED(); }
+void addSignalHandler(Signal, SignalHandler&&) { RELEASE_ASSERT_NOT_REACHED(); }
+void activateSignalHandlersFor(Signal) { RELEASE_ASSERT_NOT_REACHED(); }
+}
+#endif
