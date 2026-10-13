@@ -38,6 +38,7 @@ void configureScarletFrameView(LocalFrameView&);
 struct ScarletFrameLoadState {
     bool loading { false };
     bool needsPaint { true };
+    bool needsRenderingUpdate { true };
     FloatRect viewport;
     String error;
 };

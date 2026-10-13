@@ -201,10 +201,10 @@ private:
     // No native scroll blit is attempted: the host repaints the actual WebCore
     // view at its updated scroll position on the next tick.
     void scroll(const IntSize&, const IntRect&, const IntRect&) final { repaint(); }
-    void triggerRenderingUpdate() final { repaint(); }
-    bool scheduleRenderingUpdate() final { repaint(); return true; }
+    void triggerRenderingUpdate() final { m_state.needsRenderingUpdate = true; }
+    bool scheduleRenderingUpdate() final { m_state.needsRenderingUpdate = true; return true; }
     void setNeedsOneShotDrawingSynchronization() final { repaint(); }
-    void renderingUpdateFramesPerSecondChanged() final { repaint(); }
+    void renderingUpdateFramesPerSecondChanged() final { m_state.needsRenderingUpdate = true; }
     void frameViewLayoutOrVisualViewportChanged(const LocalFrameView&) final { repaint(); }
 
     // ABI coordinates are native CSS pixels in the embedding's viewport.

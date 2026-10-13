@@ -421,7 +421,15 @@ add_custom_target(JSCBuiltins DEPENDS "${JavaScriptCore_DERIVED_SOURCES_DIR}/JSC
 # dependency of both LLIntOffsetsExtractor and LLIntOffsetsExtractor.cpp, so the command will
 # actually be run multiple times!
 
-WEBKIT_EXECUTABLE_DECLARE(LLIntSettingsExtractor)
+if (PORT STREQUAL "Scarlet")
+    # offlineasm reads target constants from the file's bytes; it never runs
+    # either extractor. An archive preserves those constants without requiring
+    # a target executable's CRT or C/C++ runtime at engine-build time.
+    set(LLIntSettingsExtractor_LIBRARY_TYPE STATIC)
+    WEBKIT_LIBRARY_DECLARE(LLIntSettingsExtractor)
+else ()
+    WEBKIT_EXECUTABLE_DECLARE(LLIntSettingsExtractor)
+endif ()
 set(LLIntSettingsExtractor_SOURCES
     ${JAVASCRIPTCORE_DIR}/llint/LLIntSettingsExtractor.cpp
     ${JavaScriptCore_DERIVED_SOURCES_DIR}/LLIntDesiredSettings.h ${JavaScriptCore_DERIVED_SOURCES_DIR}/Bytecodes.h ${JavaScriptCore_DERIVED_SOURCES_DIR}/BytecodeStructs.h
@@ -442,7 +450,11 @@ set(LLIntSettingsExtractor_DEPENDENCIES
 # Only used for local analysis; skip the normal post-link steps.
 set_property(TARGET LLIntSettingsExtractor PROPERTY SKIP_CODESIGN YES)
 set_property(TARGET LLIntSettingsExtractor PROPERTY SKIP_DSYM YES)
-WEBKIT_EXECUTABLE(LLIntSettingsExtractor)
+if (PORT STREQUAL "Scarlet")
+    WEBKIT_LIBRARY(LLIntSettingsExtractor)
+else ()
+    WEBKIT_EXECUTABLE(LLIntSettingsExtractor)
+endif ()
 
 # LLIntSettingsExtractor target needs to have a direct or indirect
 # dependency to Bytecodes target for CMake Visual Studio generator to
@@ -450,7 +462,12 @@ WEBKIT_EXECUTABLE(LLIntSettingsExtractor)
 # generated in both projects.
 add_dependencies(LLIntSettingsExtractor Bytecodes)
 
-WEBKIT_EXECUTABLE_DECLARE(LLIntOffsetsExtractor)
+if (PORT STREQUAL "Scarlet")
+    set(LLIntOffsetsExtractor_LIBRARY_TYPE STATIC)
+    WEBKIT_LIBRARY_DECLARE(LLIntOffsetsExtractor)
+else ()
+    WEBKIT_EXECUTABLE_DECLARE(LLIntOffsetsExtractor)
+endif ()
 set(LLIntOffsetsExtractor_SOURCES
     ${JAVASCRIPTCORE_DIR}/llint/LLIntOffsetsExtractor.cpp
     ${JavaScriptCore_DERIVED_SOURCES_DIR}/LLIntDesiredOffsets.h ${JavaScriptCore_DERIVED_SOURCES_DIR}/Bytecodes.h ${JavaScriptCore_DERIVED_SOURCES_DIR}/BytecodeStructs.h
@@ -472,7 +489,11 @@ set(LLIntOffsetsExtractor_DEPENDENCIES
 # Only used for local analysis; skip the normal post-link steps.
 set_property(TARGET LLIntOffsetsExtractor PROPERTY SKIP_CODESIGN YES)
 set_property(TARGET LLIntOffsetsExtractor PROPERTY SKIP_DSYM YES)
-WEBKIT_EXECUTABLE(LLIntOffsetsExtractor)
+if (PORT STREQUAL "Scarlet")
+    WEBKIT_LIBRARY(LLIntOffsetsExtractor)
+else ()
+    WEBKIT_EXECUTABLE(LLIntOffsetsExtractor)
+endif ()
 
 # The build system will execute asm.rb every time LLIntOffsetsExtractor's mtime is newer than
 # LLIntAssembly.h's mtime. The problem we have here is: asm.rb has some built-in optimization

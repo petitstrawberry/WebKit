@@ -9,7 +9,7 @@ if (NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang" OR NOT CMAKE_SYSTEM_NAME STREQUAL 
     message(FATAL_ERROR "The Scarlet port requires the native Scarlet Clang/LLD toolchain")
 endif ()
 if (NOT SCARLET_NATIVE_LIBRARY_ROOTS)
-    message(FATAL_ERROR "Set SCARLET_NATIVE_LIBRARY_ROOTS to the trusted Scarlet SDK/dependency prefixes")
+    message(FATAL_ERROR "Set SCARLET_NATIVE_LIBRARY_ROOTS to the trusted Scarlet runtime/dependency prefixes")
 endif ()
 
 # Imported targets from WebKit's FindCairo/FindHarfBuzz omit private static

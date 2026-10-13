@@ -500,8 +500,14 @@ extern "C" int32_t scarlet_webview_tick(ScarletWebView* view)
     WTF::RunLoop::cycle();
     // This runs real animation frame callbacks, timelines, resize/scroll
     // events, observers and rendering steps; the host never executes JS.
-    view->page->updateRendering();
-    view->page->finalizeRenderingUpdate({ });
+    RefPtr frameView = view->frame->view();
+    if (view->loadState.needsRenderingUpdate || view->loadState.needsPaint || (frameView && frameView->needsLayout())) {
+        // Clear before running callbacks: animation frames and observers may
+        // request the next update while this one is being completed.
+        view->loadState.needsRenderingUpdate = false;
+        view->page->updateRendering();
+        view->page->finalizeRenderingUpdate({ });
+    }
     return paint(*view);
 }
 
