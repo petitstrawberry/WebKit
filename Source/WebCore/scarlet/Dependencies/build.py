@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compile supplied dependency sources; Nix owns retrieval and build caching."""
+"""Compile supplied dependency sources; CMake owns retrieval and build outputs."""
 import argparse
 import json
 import os
@@ -227,6 +227,9 @@ set(CMAKE_C_COMPILER "{self.cc}")
 set(CMAKE_CXX_COMPILER "{self.cxx}")
 set(CMAKE_AR "{self.tools['ar']}")
 set(CMAKE_RANLIB "{self.tools['ranlib']}")
+# Some upstream projects require real executable links for configuration.
+# Use the target LLD and installed SDK archives; never the host ld/libc.
+set(CMAKE_EXE_LINKER_FLAGS "-nostdlib -fuse-ld=lld -Wl,--start-group {self.sdk}/lib/libscarlet_cxx_support.a {self.sdk}/lib/libscarlet_c.a -Wl,--end-group" CACHE STRING "Native cross-link flags" FORCE)
 set(CMAKE_FIND_ROOT_PATH "{self.prefix};{self.sdk}")
 set(CMAKE_PREFIX_PATH "{self.prefix};{self.sdk}")
 '''
@@ -315,7 +318,7 @@ pkg_config_path = {[str(p / 'lib/pkgconfig') for p in (self.prefix, self.sdk)]!r
 
     def cmake(self, name, source):
         build = self.root / "build" / name
-        self.run(["cmake", "-S", source, "-B", build, "-G", "Ninja",
+        self.run(["cmake", "--fresh", "-S", source, "-B", build, "-G", "Ninja",
                   f"-DCMAKE_TOOLCHAIN_FILE={self.control / 'native.cmake'}", "-DCMAKE_BUILD_TYPE=Release",
                   f"-DCMAKE_PROJECT_INCLUDE={self.control / 'static-only.cmake'}", "-DCMAKE_POLICY_DEFAULT_CMP0164=OLD",
                   f"-DCMAKE_INSTALL_PREFIX={self.prefix}", "-DCMAKE_INSTALL_LIBDIR=lib", "-DBUILD_SHARED_LIBS=OFF",
