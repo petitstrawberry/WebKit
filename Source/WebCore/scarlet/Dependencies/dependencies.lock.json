@@ -8,34 +8,6 @@
     "copy_source_overlays": false,
     "target_headers_and_libraries": "Scarlet SDK and this native dependency prefix only"
   },
-  "sdk": {
-    "toolchain": "share/scarlet/cmake/aarch64-scarlet.cmake",
-    "c_driver": "bin/aarch64-scarlet-clang",
-    "cxx_driver": "bin/aarch64-scarlet-clang++",
-    "owned_archives": [
-      "lib/libscarlet_c.a",
-      "lib/libc++.a",
-      "lib/libc++abi.a",
-      "lib/libscarlet_cxx_support.a",
-      "lib/libscarlet_c_startup.a",
-      "lib/libscarlet_webcore_native_memory.a"
-    ],
-    "llvm_source": {
-      "kind": "git",
-      "git_url": "https://github.com/petitstrawberry/llvm-project.git",
-      "branch": "scarlet",
-      "commit": "eeab068866d3156b27c937a6979e506daa736e93",
-      "version": "21.1.8",
-      "ownership": "Built and installed by the Scarlet SDK; this dependency recipe never builds or copies the C/C++ runtime."
-    },
-    "scarlet_source": {
-      "kind": "git",
-      "git_url": "https://github.com/petitstrawberry/Scarlet.git",
-      "branch": "feature/webkit-native",
-      "commit": "2cb9d3142ffd5d276990f39dc6cce4a939d479b2",
-      "ownership": "Built and installed by the Scarlet SDK; owns native libc, CXXSupport, CStartup and the WebCore shared-memory ABI."
-    }
-  },
   "icu_data": {
     "kind": "archive",
     "url": "https://github.com/unicode-org/icu/releases/download/release-78.3/icu4c-78.3-sources.tgz",
