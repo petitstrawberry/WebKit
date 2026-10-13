@@ -1,26 +1,19 @@
 # Scarlet native dependencies
 
-`default.nix` owns the static AArch64 dependency package for the Scarlet WebKit
-port. It reads the immutable Git commits and official release checksums from
-`dependencies.lock.json`. Nix retrieves the sources, manages build outputs and
-caching, and supplies the installed scarlet-sdk C/C++ runtime.
+`CMakeLists.txt` prepares the pinned sources with CMake FetchContent and builds
+the real static AArch64 libraries using `build.py` and the installed SDK runtime.
+The dependency commits and release checksums live in `dependencies.lock.json`.
+Myrica calls this producer from its Cargo build directory; neither the Scarlet
+flake nor bundle scripts manage these sources or compile the engine.
 
-`build.py` only configures, compiles and installs the supplied upstream sources.
-It does not fetch repositories, calculate source hashes, maintain source-cache
-state, replay patches, or build libc/libc++ itself. Upstream generated files stay
-in ordinary writable build copies inside the Nix build directory. Host ICU
-configuration produces cross-build metadata only; target libraries use native
-AArch64 compilers and Scarlet headers. ICU data comes from its pinned official
-release archive.
+`build.py` configures, compiles and installs supplied sources. It does not fetch
+repositories, maintain hashes/cache state, replay local patches, or build libc.
+Host ICU configuration supplies cross-build metadata; the target common/i18n
+libraries and official ICU data are native AArch64. Fontconfig and SQLite each
+have one producer here. Curl remains file-only; live HTTP/TLS belongs to the
+embedding client. A Rust embedding supplies the native shared-memory C ABI; a
+standalone renderer supplies its real bridge archive.
 
-The recipe uses real static Cairo, shaping/font, image, database and value-level
-crypto libraries. Curl's profile is file-only; live HTTP/TLS requests remain the
-embedding client's responsibility. SQLite retains the Scarlet flock VFS.
-Fontconfig configuration is staged into the prefix, never installed into host
-`/etc` or `/share`. The runtime and WebCore shared-memory bridge are separate
-owned dependencies.
-
-The completed build audits every archive member as an AArch64 ELF relocatable
-object. `python3 test_recipe.py` checks malformed and foreign archive rejection.
-Neither archive parsing nor a successful cross build establishes guest behavior
-or GPU rendering; those are verified through the normal Scarlet applications.
+The completed build audits every archive member as an AArch64 ELF relocatable.
+`python3 test_recipe.py` checks malformed and foreign archive rejection. Building
+and archive validation do not establish guest behavior or GPU rendering.

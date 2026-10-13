@@ -93,8 +93,14 @@ set(_scarlet_private_archives
     "${_scarlet_pixman}"
     "${_scarlet_expat}"
     "${SCARLET_CXX_RUNTIME_SUPPORT_LIBRARY}"
-    "${SCARLET_NATIVE_MEMORY_LIBRARY}"
 )
+# Rust embeddings supply this C ABI from their own native Rust dependency.
+# A standalone renderer still supplies the actual native bridge archive.
+if (SCARLET_NATIVE_MEMORY_LIBRARY)
+    list(APPEND _scarlet_private_archives "${SCARLET_NATIVE_MEMORY_LIBRARY}")
+elseif (SCARLET_BUILD_RENDERER)
+    message(FATAL_ERROR "A standalone Scarlet renderer requires its native memory bridge")
+endif ()
 list(REMOVE_DUPLICATES _scarlet_private_archives)
 foreach (_archive IN LISTS _scarlet_private_archives)
     _scarlet_check_archive("${_archive}")
