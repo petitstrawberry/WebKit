@@ -263,6 +263,11 @@ pkg_config_path = {[str(p / 'lib/pkgconfig') for p in (self.prefix, self.sdk)]!r
         for name in BUILD_ORDER:
             source = Path(source_map[name])
             work = self.root / "sources" / name
+            # Writable upstream build copies are disposable inputs, not a
+            # second source cache. Refresh them on retries or changed pins;
+            # CMake owns the downloaded originals and incremental objects.
+            if work.exists():
+                shutil.rmtree(work)
             if source.is_dir():
                 shutil.copytree(source, work)
             else:
