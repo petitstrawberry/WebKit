@@ -2487,7 +2487,13 @@ end)
 macro checkTraps(dispatch)
     loadp CodeBlock[cfr], t1
     loadp CodeBlock::m_vm[t1], t1
-    loadi VM::m_threadContext+VMThreadContext::m_traps+VMTraps::m_trapBits[t1], t0
+    if C_LOOP
+        # A C++ plain load can be hoisted out of a tight bytecode loop. Read
+        # cross-thread trap publication atomically in the C-loop backend.
+        atomicloadi VM::m_threadContext+VMThreadContext::m_traps+VMTraps::m_trapBits[t1], t0
+    else
+        loadi VM::m_threadContext+VMThreadContext::m_traps+VMTraps::m_trapBits[t1], t0
+    end
     andi VMTrapsAsyncEvents, t0
     btpnz t0, .handleTraps
 .afterHandlingTraps:

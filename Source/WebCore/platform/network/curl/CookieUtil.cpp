@@ -103,7 +103,14 @@ static void parseCookieAttributes(const String& attribute, bool& hasMaxAge, Cook
     } else
         attributeName = attribute.trim(deprecatedIsSpaceOrNewline);
 
-    if (equalLettersIgnoringASCIICase(attributeName, "httponly"_s))
+    if (equalLettersIgnoringASCIICase(attributeName, "samesite"_s)) {
+        if (equalLettersIgnoringASCIICase(attributeValue, "strict"_s))
+            result.sameSite = Cookie::SameSitePolicy::Strict;
+        else if (equalLettersIgnoringASCIICase(attributeValue, "none"_s))
+            result.sameSite = Cookie::SameSitePolicy::None;
+        else
+            result.sameSite = Cookie::SameSitePolicy::Lax;
+    } else if (equalLettersIgnoringASCIICase(attributeName, "httponly"_s))
         result.httpOnly = true;
     else if (equalLettersIgnoringASCIICase(attributeName, "secure"_s))
         result.secure = true;
@@ -171,6 +178,7 @@ std::optional<Cookie> parseCookieHeader(const String& cookieLine)
     }
 
     Cookie cookie;
+    cookie.sameSite = Cookie::SameSitePolicy::Lax;
     cookie.name = cookieName.trim(deprecatedIsSpaceOrNewline);
     cookie.value = cookieValue.trim(deprecatedIsSpaceOrNewline);
 

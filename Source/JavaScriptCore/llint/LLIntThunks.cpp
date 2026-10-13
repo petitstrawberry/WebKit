@@ -43,6 +43,8 @@
 #include <wtf/NeverDestroyed.h>
 #if OS(SCARLET)
 #include <atomic>
+#include <cstdio>
+#include <cstdlib>
 #endif
 
 namespace JSC {
@@ -928,6 +930,8 @@ EncodedJSValue vmEntryToJavaScript(void* executableAddress, VM* vm, ProtoCallFra
 {
 #if OS(SCARLET)
     scarletJavaScriptExecutionEntries.fetch_add(1, std::memory_order_relaxed);
+    if (std::getenv("SCARLET_GC_DIAGNOSTICS"))
+        std::printf("SCARLET_CLOOP_ENTRY vm=%p trap_bits=%p offset=%td\n", vm, vm->traps().trapBitsAddress(), static_cast<uint8_t*>(vm->traps().trapBitsAddress()) - reinterpret_cast<uint8_t*>(vm));
 #endif
     JSValue result = CLoop::execute(llint_vm_entry_to_javascript, executableAddress, vm, protoCallFrame);
     return JSValue::encode(result);

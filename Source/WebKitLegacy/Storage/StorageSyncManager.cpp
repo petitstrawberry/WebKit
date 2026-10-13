@@ -24,6 +24,7 @@
  */
 
 #include "StorageSyncManager.h"
+#include <wtf/CheckedPtr.h>
 
 #include "StorageThread.h"
 #include <wtf/FileSystem.h>

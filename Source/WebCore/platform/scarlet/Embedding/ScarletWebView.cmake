@@ -13,9 +13,29 @@ add_library(ScarletWebView STATIC
     "${CMAKE_CURRENT_LIST_DIR}/ScarletFrameLoaderClient.cpp"
     "${CMAKE_CURRENT_LIST_DIR}/ScarletEditorClient.cpp"
     "${CMAKE_CURRENT_LIST_DIR}/ScarletLiveLoader.cpp"
+    "${CMAKE_CURRENT_LIST_DIR}/ScarletStorage.cpp"
+    "${CMAKE_SOURCE_DIR}/Source/WebKitLegacy/Storage/WebStorageNamespaceProvider.cpp"
+    "${CMAKE_SOURCE_DIR}/Source/WebKitLegacy/Storage/StorageNamespaceImpl.cpp"
+    "${CMAKE_SOURCE_DIR}/Source/WebKitLegacy/Storage/StorageAreaImpl.cpp"
+    "${CMAKE_SOURCE_DIR}/Source/WebKitLegacy/Storage/StorageAreaSync.cpp"
+    "${CMAKE_SOURCE_DIR}/Source/WebKitLegacy/Storage/StorageSyncManager.cpp"
+    "${CMAKE_SOURCE_DIR}/Source/WebKitLegacy/Storage/StorageTracker.cpp"
+    "${CMAKE_SOURCE_DIR}/Source/WebKitLegacy/Storage/StorageThread.cpp"
+
     "${CMAKE_CURRENT_LIST_DIR}/ScarletChromeClient.cpp"
     "${CMAKE_CURRENT_LIST_DIR}/ScarletBackForwardClient.cpp"
 )
+# Legacy storage sources normally receive their platform configuration from
+# their parent target. This embedding builds them with WebCore's native config.
+set_source_files_properties(
+    "${CMAKE_SOURCE_DIR}/Source/WebKitLegacy/Storage/WebStorageNamespaceProvider.cpp"
+    "${CMAKE_SOURCE_DIR}/Source/WebKitLegacy/Storage/StorageNamespaceImpl.cpp"
+    "${CMAKE_SOURCE_DIR}/Source/WebKitLegacy/Storage/StorageAreaImpl.cpp"
+    "${CMAKE_SOURCE_DIR}/Source/WebKitLegacy/Storage/StorageAreaSync.cpp"
+    "${CMAKE_SOURCE_DIR}/Source/WebKitLegacy/Storage/StorageSyncManager.cpp"
+    "${CMAKE_SOURCE_DIR}/Source/WebKitLegacy/Storage/StorageTracker.cpp"
+    "${CMAKE_SOURCE_DIR}/Source/WebKitLegacy/Storage/StorageThread.cpp"
+    PROPERTIES COMPILE_OPTIONS "-include;${CMAKE_BINARY_DIR}/cmakeconfig.h;-include;${WEBCORE_DIR}/config.h")
 set_target_properties(ScarletWebView PROPERTIES
     OUTPUT_NAME ScarletWebView
     CXX_STANDARD 23
@@ -23,7 +43,7 @@ set_target_properties(ScarletWebView PROPERTIES
     CXX_EXTENSIONS NO
 )
 scarlet_attach_engine(ScarletWebView)
-target_include_directories(ScarletWebView PRIVATE "${CMAKE_CURRENT_LIST_DIR}")
+target_include_directories(ScarletWebView PRIVATE "${CMAKE_CURRENT_LIST_DIR}" "${CMAKE_SOURCE_DIR}/Source/WebKitLegacy/Storage")
 if (NOT SCARLET_EMBEDDING_RUNTIME_LIBRARIES)
     message(FATAL_ERROR "The embedding requires the complete native C/C++ runtime archive list")
 endif ()

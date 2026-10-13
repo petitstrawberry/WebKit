@@ -670,6 +670,8 @@ class Instruction
         when "noti"
             cloopEmitUnaryOperation(operands, :int32, "~")
 
+        when "atomicloadi"
+            $asm.putc "#{operands[1].clLValue(:uint32)} = WTF::atomicLoad(&#{operands[0].uint32MemRef}, std::memory_order_acquire);"
         when "loadi"
             $asm.putc "#{operands[1].clLValue(:uint32)} = #{operands[0].uint32MemRef};"
             # There's no need to call clearHighWord() here because the above will

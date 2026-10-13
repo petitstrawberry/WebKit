@@ -37,6 +37,11 @@
 #include "DocumentView.h"
 #include "FormState.h"
 #include "FrameLoader.h"
+#include "FrameDestructionObserverInlines.h"
+#include "NodeInlines.h"
+#include "FrameTree.h"
+#include "FrameTreeSyncData.h"
+#include "ReferrerPolicy.h"
 #include "FrameNetworkingContext.h"
 #include "HTMLFrameOwnerElement.h"
 #include "HistoryItem.h"
@@ -75,14 +80,15 @@ void configureScarletFrameView(LocalFrameView& view)
 
 void ScarletFrameLoaderClient::dispatchDecidePolicyForNewWindowAction(const NavigationAction&, const ResourceRequest&, FormState*, const String&, std::optional<HitTestResult>&&, FramePolicyFunction&& completion)
 {
-    m_state.error = "Popup windows are unavailable in Scarlet WebView."_s;
+    if (m_frame.isMainFrame())
+        m_state.error = "Popup windows are unavailable in Scarlet WebView."_s;
     completion(PolicyAction::Ignore);
 }
 
 void ScarletFrameLoaderClient::dispatchDecidePolicyForNavigationAction(const NavigationAction&, const ResourceRequest& request, const ResourceResponse&, FormState*, const String&, std::optional<NavigationIdentifier>, std::optional<HitTestResult>&&, bool, NavigationUpgradeToHTTPSBehavior, SandboxFlags, PolicyDecisionMode, FramePolicyFunction&& completion)
 {
-    bool supported = request.url().protocolIsInHTTPFamily() || request.url().protocolIsData() || request.url().isAboutBlank();
-    if (!supported)
+    bool supported = request.url().protocolIsInHTTPFamily() || request.url().protocolIsData() || request.url().protocolIsBlob() || (request.url().isAboutBlank() || request.url().isAboutSrcDoc());
+    if (!supported && m_frame.isMainFrame())
         m_state.error = "Unsupported navigation URL scheme."_s;
     completion(supported ? PolicyAction::Use : PolicyAction::Ignore);
 }
@@ -118,9 +124,30 @@ Ref<DocumentLoader> ScarletFrameLoaderClient::createDocumentLoader(ResourceReque
     return DocumentLoader::create(WTF::move(request), WTF::move(substituteData), { });
 }
 
-RefPtr<LocalFrame> ScarletFrameLoaderClient::createFrame(const AtomString&, HTMLFrameOwnerElement&)
+RefPtr<LocalFrame> ScarletFrameLoaderClient::createFrame(const AtomString& name, HTMLFrameOwnerElement& owner)
 {
-    return nullptr;
+    RefPtr parent = owner.document().frame();
+    RefPtr page = parent ? parent->page() : nullptr;
+    if (!page)
+        return nullptr;
+    auto sandbox = owner.sandboxFlags();
+    sandbox.add(parent->effectiveSandboxFlags());
+    auto referrerPolicy = owner.referrerPolicy();
+    if (referrerPolicy == ReferrerPolicy::EmptyString) {
+        if (RefPtr document = page->localTopDocument())
+            referrerPolicy = document->referrerPolicy();
+    }
+    auto child = LocalFrame::createSubframe(*page,
+        [state = &m_state](LocalFrame& frame, FrameLoader& loader) {
+            return makeUniqueRefWithoutRefCountedCheck<ScarletFrameLoaderClient>(frame, loader, *state);
+        }, generateFrameIdentifier(), sandbox, referrerPolicy, owner, FrameTreeSyncData::create());
+    child->tree().setSpecifiedName(name);
+    child->init();
+    // Initializing about:blank can execute script which removes the frame.
+    if (!child->page())
+        return nullptr;
+    m_state.needsRenderingUpdate = true;
+    return child;
 }
 
 RefPtr<Widget> ScarletFrameLoaderClient::createPlugin(HTMLPlugInElement&, const URL&, const Vector<AtomString>&, const Vector<AtomString>&, const String&, bool)
@@ -268,6 +295,8 @@ void ScarletFrameLoaderClient::dispatchWillClose()
 
 void ScarletFrameLoaderClient::dispatchDidStartProvisionalLoad()
 {
+    if (!m_frame.isMainFrame())
+        return;
     m_state.loading = true;
     m_state.error = { };
 }
@@ -282,12 +311,16 @@ void ScarletFrameLoaderClient::dispatchDidCommitLoad(const std::optional<BackFor
 
 void ScarletFrameLoaderClient::dispatchDidFailProvisionalLoad(const ResourceError& error, WillContinueLoading, WillInternallyHandleFailure)
 {
+    if (!m_frame.isMainFrame())
+        return;
     m_state.loading = false;
     m_state.error = error.localizedDescription();
 }
 
 void ScarletFrameLoaderClient::dispatchDidFailLoad(const ResourceError& error)
 {
+    if (!m_frame.isMainFrame())
+        return;
     m_state.loading = false;
     m_state.error = error.localizedDescription();
 }
@@ -298,7 +331,9 @@ void ScarletFrameLoaderClient::dispatchDidFinishDocumentLoad()
 
 void ScarletFrameLoaderClient::dispatchDidFinishLoad()
 {
-    m_state.loading = false;
+    if (m_frame.isMainFrame())
+        m_state.loading = false;
+    m_state.needsRenderingUpdate = true;
 }
 
 void ScarletFrameLoaderClient::dispatchDidReachLayoutMilestone(OptionSet<LayoutMilestone>)
@@ -321,7 +356,7 @@ void ScarletFrameLoaderClient::dispatchShow()
 void ScarletFrameLoaderClient::dispatchDecidePolicyForResponse(const ResourceResponse& response, const ResourceRequest&, const String& download, FramePolicyFunction&& completion)
 {
     bool supported = download.isNull() && !response.isAttachment() && canShowMIMEType(response.mimeType());
-    if (!supported)
+    if (!supported && m_frame.isMainFrame())
         m_state.error = "Downloads and unsupported document MIME types are unavailable."_s;
     completion(supported ? PolicyAction::Use : PolicyAction::Ignore);
 }
@@ -332,6 +367,8 @@ void ScarletFrameLoaderClient::cancelPolicyCheck()
 
 void ScarletFrameLoaderClient::dispatchUnableToImplementPolicy(const ResourceError& error)
 {
+    if (!m_frame.isMainFrame())
+        return;
     m_state.loading = false;
     m_state.error = error.localizedDescription();
 }
@@ -342,6 +379,8 @@ void ScarletFrameLoaderClient::revertToProvisionalState(DocumentLoader*)
 
 void ScarletFrameLoaderClient::setMainDocumentError(DocumentLoader*, const ResourceError& error)
 {
+    if (!m_frame.isMainFrame())
+        return;
     m_state.error = error.localizedDescription();
 }
 
@@ -351,7 +390,8 @@ void ScarletFrameLoaderClient::setMainFrameDocumentReady(bool)
 
 void ScarletFrameLoaderClient::startDownload(const ResourceRequest&, const String&, FromDownloadAttribute)
 {
-    m_state.error = "Downloads are unavailable in Scarlet WebView."_s;
+    if (m_frame.isMainFrame())
+        m_state.error = "Downloads are unavailable in Scarlet WebView."_s;
 }
 
 void ScarletFrameLoaderClient::willChangeTitle(DocumentLoader*)
@@ -391,7 +431,7 @@ void ScarletFrameLoaderClient::loadStorageAccessQuirksIfNeeded()
 
 bool ScarletFrameLoaderClient::canHandleRequest(const ResourceRequest& request) const
 {
-    return request.url().protocolIsInHTTPFamily() || request.url().protocolIsData() || request.url().isAboutBlank();
+    return request.url().protocolIsInHTTPFamily() || request.url().protocolIsData() || request.url().protocolIsBlob() || (request.url().isAboutBlank() || request.url().isAboutSrcDoc());
 }
 
 bool ScarletFrameLoaderClient::canShowMIMEType(const String& mime) const

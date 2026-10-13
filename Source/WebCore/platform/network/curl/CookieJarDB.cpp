@@ -59,6 +59,7 @@ WTF_MAKE_TZONE_ALLOCATED_IMPL(CookieJarDB);
     "  session INTEGER NOT NULL,"\
     "  httponly INTEGER NOT NULL DEFAULT 0,"\
     "  secure INTEGER NOT NULL DEFAULT 0,"\
+    "  samesite INTEGER NOT NULL DEFAULT 1,"\
     "  lastupdated INTEGER NOT NULL DEFAULT CURRENT_TIMESTAMP, "\
     "  UNIQUE(name, domain, path));"_s
 #define CREATE_DOMAIN_INDEX_SQL \
@@ -72,8 +73,8 @@ WTF_MAKE_TZONE_ALLOCATED_IMPL(CookieJarDB);
 #define CHECK_EXISTS_HTTPONLY_COOKIE_SQL \
     "SELECT name FROM Cookie WHERE (name = ?) AND (domain = ?) AND (path = ?) AND (httponly = 1);"_s
 #define SET_COOKIE_SQL \
-    "INSERT OR REPLACE INTO Cookie (name, value, domain, path, expires, size, session, httponly, secure) "\
-    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);"_s
+    "INSERT OR REPLACE INTO Cookie (name, value, domain, path, expires, size, session, httponly, secure, samesite) "\
+    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);"_s
 #define DELETE_COOKIE_BY_NAME_DOMAIN_PATH_SQL \
     "DELETE FROM Cookie WHERE name = ? AND domain = ? AND path = ?;"_s
 #define DELETE_COOKIE_BY_NAME_DOMAIN_SQL \
@@ -91,7 +92,7 @@ WTF_MAKE_TZONE_ALLOCATED_IMPL(CookieJarDB);
 // If the database schema is updated:
 // - Increment schemaVersion
 // - Add upgrade logic in verifySchemaVersion to migrate databases from the previous schema version
-static constexpr int schemaVersion = 1;
+static constexpr int schemaVersion = 2;
 
 
 CookieJarDB::CookieJarDB(const String& databasePath)
@@ -196,7 +197,8 @@ void CookieJarDB::verifySchemaVersion()
         return;
 
     auto statement = m_database.prepareStatement("PRAGMA user_version"_s);
-    int version = statement ? statement->columnInt(0) : 0;
+    int version = statement && statement->step() == SQLITE_ROW ? statement->columnInt(0) : 0;
+    statement = nullptr;
     if (version == schemaVersion)
         return;
 
@@ -206,6 +208,10 @@ void CookieJarDB::verifySchemaVersion()
 
     case 0:
         deleteAllTables();
+        break;
+    case 1:
+        if (!executeSQLStatement(m_database.prepareStatement("ALTER TABLE Cookie ADD COLUMN samesite INTEGER NOT NULL DEFAULT 1"_s)))
+            return;
         break;
     default:
         // This case can be reached when downgrading versions
@@ -385,7 +391,7 @@ std::optional<Vector<Cookie>> CookieJarDB::searchCookies(const URL& firstParty, 
 
     RegistrableDomain registrableDomain { requestUrl };
 
-    auto pstmt = m_database.prepareStatement("SELECT name, value, domain, path, expires, httponly, secure, session FROM Cookie WHERE "\
+    auto pstmt = m_database.prepareStatement("SELECT name, value, domain, path, expires, httponly, secure, session, samesite FROM Cookie WHERE "\
         "(NOT ((session = 0) AND (expires < ?)))"
         "AND (httponly = COALESCE(NULLIF(?, -1), httponly)) "\
         "AND (secure = COALESCE(NULLIF(?, -1), secure)) "\
@@ -443,6 +449,7 @@ std::optional<Vector<Cookie>> CookieJarDB::searchCookies(const URL& firstParty, 
         cookie.httpOnly = cookieHttpOnly;
         cookie.secure = cookieSecure;
         cookie.session = cookieSession;
+        cookie.sameSite = static_cast<Cookie::SameSitePolicy>(pstmt->columnInt(8));
         results.append(WTF::move(cookie));
     }
 
@@ -455,7 +462,7 @@ Vector<Cookie> CookieJarDB::getAllCookies()
     if (!isEnabled() || !m_database.isOpen())
         return result;
 
-    auto pstmt = m_database.prepareStatement("SELECT name, value, domain, path, expires, httponly, secure, session FROM Cookie"_s);
+    auto pstmt = m_database.prepareStatement("SELECT name, value, domain, path, expires, httponly, secure, session, samesite FROM Cookie"_s);
     if (!pstmt)
         return result;
 
@@ -471,6 +478,7 @@ Vector<Cookie> CookieJarDB::getAllCookies()
         cookie.httpOnly = (pstmt->columnInt(5) == 1);
         cookie.secure = (pstmt->columnInt(6) == 1);
         cookie.session = (pstmt->columnInt(7) == 1);
+        cookie.sameSite = static_cast<Cookie::SameSitePolicy>(pstmt->columnInt(8));
         result.append(WTF::move(cookie));
     }
     return result;
@@ -520,7 +528,7 @@ bool CookieJarDB::canAcceptCookie(const Cookie& cookie, const URL& firstParty, c
 bool CookieJarDB::setCookie(const Cookie& cookie)
 {
     auto expires = cookie.expires.value_or(0.0);
-    if (!cookie.session && MonotonicTime::fromRawSeconds(expires / msPerSecond) <= MonotonicTime::now())
+    if (!cookie.session && WallTime::fromRawSeconds(expires / msPerSecond) <= WallTime::now())
         return deleteCookieInternal(cookie.name, cookie.domain, cookie.path);
 
     auto& statement = preparedStatement(SET_COOKIE_SQL);
@@ -535,6 +543,7 @@ bool CookieJarDB::setCookie(const Cookie& cookie)
     statement.bindInt(7, cookie.session ? 1 : 0);
     statement.bindInt(8, cookie.httpOnly ? 1 : 0);
     statement.bindInt(9, cookie.secure ? 1 : 0);
+    statement.bindInt(10, static_cast<int>(cookie.sameSite));
     return checkSQLiteReturnCode(statement.step());
 }
 
@@ -550,7 +559,9 @@ bool CookieJarDB::setCookie(const URL& firstParty, const URL& url, const String&
     if (!cookie || (cookie->name.isEmpty() && cookie->value.isEmpty()))
         return false;
 
-    if (!checkSecureCookie(*cookie))
+    if ((cookie->secure && !url.protocolIs("https"_s))
+        || (cookie->sameSite == Cookie::SameSitePolicy::None && !cookie->secure)
+        || !checkSecureCookie(*cookie))
         return false;
 
     if (cookie->domain.isEmpty())

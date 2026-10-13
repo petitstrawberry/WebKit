@@ -4,8 +4,17 @@
  */
 #include "config.h"
 #include "ScarletLiveLoader.h"
+#include "ScarletStorage.h"
+#include "CookieJar.h"
+#include "SameSiteInfo.h"
 
 #include "CachedResource.h"
+#include "BlobRegistry.h"
+#include "BlobRegistryImpl.h"
+#include "BlobPart.h"
+#include "BlobDataFileReference.h"
+#include "PolicyContainer.h"
+#include <wtf/TZoneMallocInlines.h>
 #include "CacheValidation.h"
 #include "CrossOriginAccessControl.h"
 #include "CrossOriginEmbedderPolicy.h"
@@ -255,8 +264,8 @@ public:
             completion(nullptr);
             return;
         }
-        if (!request.url().protocolIsInHTTPFamily() && !request.url().protocolIsData()) {
-            auto error = unsupportedError(request, "Only HTTP(S) and native data URLs are supported by this embedding"_s);
+        if (!request.url().protocolIsInHTTPFamily() && !request.url().protocolIsData() && !request.url().protocolIsBlob()) {
+            auto error = unsupportedError(request, "Only HTTP(S), blob and native data URLs are supported by this embedding"_s);
             state->second->error = utf8(error.localizedDescription());
             resource.setResourceError(error);
             completion(nullptr);
@@ -285,7 +294,7 @@ public:
                 load->page = page;
                 load->registration = registration;
                 load->priority = loader->request().priority();
-                load->phase = loader->request().url().protocolIsData() ? Phase::LocalPending : Phase::Queued;
+                load->phase = (loader->request().url().protocolIsData() || loader->request().url().protocolIsBlob()) ? Phase::LocalPending : Phase::Queued;
                 if (load->phase == Phase::Queued && state != m_pages.end()
                     && state->second->registration == registration && !state->second->unregistering)
                     assignIdentifier(load);
@@ -635,6 +644,11 @@ private:
                 return false;
             headerBytes += storage.headerData.back().value.size();
         }
+        if (request.allowCookies() && load.loader->options().storedCredentialsPolicy == StoredCredentialsPolicy::Use) {
+            auto cookie = load.page->cookieJar().cookieRequestHeaderFieldValue(request.firstPartyForCookies(), SameSiteInfo::create(request), request.url(), CookieJar::shouldIncludeSecureCookies(request.url())).first;
+            if (!cookie.isEmpty())
+                storage.headerData.push_back({ "Cookie", utf8(cookie) });
+        }
         if (auto* body = request.httpBody()) {
             for (auto& element : body->elements()) {
                 auto* bytes = std::get_if<Vector<uint8_t>>(&element.data);
@@ -754,6 +768,14 @@ private:
             fail(load, liveError(LiveError::Transport, load->loader->request().url(), "Host returned invalid HTTP response headers"_s));
             return;
         }
+        // Preserve distinct Set-Cookie fields, including redirect responses.
+        // WebCore determines credential policy before the transport is polled.
+        if (load->loader->options().storedCredentialsPolicy == StoredCredentialsPolicy::Use) {
+            for (auto& header : load->response->headers) {
+                if (equalLettersIgnoringASCIICase(nativeString(header.name), "set-cookie"_s))
+                    storeScarletResponseCookie(load->loader->request(), nativeString(header.value));
+            }
+        }
         // New HTTP responses do not pass through CachedResourceLoader's
         // MemoryCache::Use branch, where WebCore applies CORP to cached loads.
         // Apply that same native validator before exposing new transport bytes.
@@ -848,6 +870,30 @@ private:
     Vector<Function<void(bool)>> m_onlineStateListeners;
 };
 
+class ScarletBlobRegistry final : public WebCore::BlobRegistry {
+    WTF_MAKE_TZONE_ALLOCATED(ScarletBlobRegistry);
+    WTF_OVERRIDE_DELETE_FOR_CHECKED_PTR(ScarletBlobRegistry);
+private:
+    void registerInternalFileBlobURL(const URL& url, Ref<WebCore::BlobDataFileReference>&& reference, const String&, const String& contentType) final { m_blobRegistry.registerInternalFileBlobURL(url, WTF::move(reference), contentType); }
+    void registerInternalBlobURL(const URL& url, Vector<WebCore::BlobPart>&& parts, const String& contentType) final { m_blobRegistry.registerInternalBlobURL(url, WTF::move(parts), contentType); }
+    void registerBlobURL(const URL& url, const URL& srcURL, const WebCore::PolicyContainer& policyContainer, const std::optional<WebCore::SecurityOriginData>& topOrigin) final { m_blobRegistry.registerBlobURL(url, srcURL, policyContainer, topOrigin); }
+    void registerInternalBlobURLOptionallyFileBacked(const URL& url, const URL& srcURL, RefPtr<WebCore::BlobDataFileReference>&& reference, const String& contentType) final { m_blobRegistry.registerInternalBlobURLOptionallyFileBacked(url, srcURL, WTF::move(reference), contentType, { }); }
+    void registerInternalBlobURLForSlice(const URL& url, const URL& srcURL, long long start, long long end, const String& contentType) final { m_blobRegistry.registerInternalBlobURLForSlice(url, srcURL, start, end, contentType); }
+    void unregisterBlobURL(const URL& url, const std::optional<WebCore::SecurityOriginData>& topOrigin) final { m_blobRegistry.unregisterBlobURL(url, topOrigin); }
+    String blobType(const URL& url) final { return m_blobRegistry.blobType(url); }
+    unsigned long long blobSize(const URL& url) final { return m_blobRegistry.blobSize(url); }
+    void writeBlobsToTemporaryFilesForIndexedDB(const Vector<String>& blobURLs, CompletionHandler<void(Vector<String>&& filePaths)>&& completionHandler) final { m_blobRegistry.writeBlobsToTemporaryFilesForIndexedDB(blobURLs, WTF::move(completionHandler)); }
+    void registerBlobURLHandle(const URL& url, const std::optional<WebCore::SecurityOriginData>& topOrigin) final { m_blobRegistry.registerBlobURLHandle(url, topOrigin); }
+    void unregisterBlobURLHandle(const URL& url, const std::optional<WebCore::SecurityOriginData>& topOrigin) final { m_blobRegistry.unregisterBlobURLHandle(url, topOrigin); }
+
+    WebCore::BlobRegistryImpl* blobRegistryImpl() final { return &m_blobRegistry; }
+
+    WebCore::BlobRegistryImpl m_blobRegistry;
+};
+
+WTF_MAKE_TZONE_ALLOCATED_IMPL(ScarletBlobRegistry);
+
+
 class ScarletLivePlatformStrategies final : public PlatformStrategies {
 public:
     ScarletLiveLoaderStrategy& loader() { return *m_loader; }
@@ -855,7 +901,7 @@ private:
     LoaderStrategy* createLoaderStrategy() final { return m_loader; }
     PasteboardStrategy* createPasteboardStrategy() final { unsupportedService("clipboard"); }
     MediaStrategy* createMediaStrategy() final { unsupportedService("media"); }
-    BlobRegistry* createBlobRegistry() final { unsupportedService("blob registry"); }
+    BlobRegistry* createBlobRegistry() final { return new ScarletBlobRegistry; }
 #if ENABLE(DECLARATIVE_WEB_PUSH)
     PushStrategy* createPushStrategy() final { unsupportedService("web push"); }
 #endif

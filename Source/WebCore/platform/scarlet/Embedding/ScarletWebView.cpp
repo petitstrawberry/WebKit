@@ -6,6 +6,9 @@
 #include "ScarletChromeClient.h"
 #include "ScarletBackForwardClient.h"
 #include "ScarletFrameLoaderClient.h"
+#include "ScarletStorage.h"
+#include "CookieJar.h"
+#include "StorageNamespaceProvider.h"
 #include "ScarletLiveLoader.h"
 #include "Color.h"
 #include "BackForwardController.h"
@@ -255,6 +258,7 @@ extern "C" int32_t scarlet_webview_shutdown()
         return status;
     if (!views.empty())
         return SWV_FAILED;
+    closeScarletStorage();
     WTF::RunLoop::cycle();
     pthread_mutex_lock(&initializationMutex);
     terminationVM = nullptr;
@@ -310,6 +314,9 @@ extern "C" int32_t scarlet_webview_create(const SWVConfiguration* configuration,
     screenForView(*view);
     auto pageConfiguration = pageConfigurationWithEmptyClients(std::nullopt, PAL::SessionID::defaultSessionID());
     pageConfiguration.loadsSubresources = true;
+    pageConfiguration.cookieJar = createScarletCookieJar();
+    pageConfiguration.storageNamespaceProvider = createScarletStorageNamespaceProvider();
+    pageConfiguration.storageNamespaceProvider->setSessionStorageQuota(5 * 1024 * 1024);
     pageConfiguration.editorClient = createScarletEditorClient();
     pageConfiguration.chromeClient = createScarletChromeClient(view->loadState);
     pageConfiguration.backForwardClient = createScarletBackForwardClient();
@@ -328,12 +335,9 @@ extern "C" int32_t scarlet_webview_create(const SWVConfiguration* configuration,
     settings.setImagesEnabled(true);
     settings.setLoadsImagesAutomatically(true);
     settings.setUseUIProcessForBackForwardItemLoading(false);
-    // Empty page providers are not a storage implementation. Disable these
-    // APIs so WebCore reports their unavailability rather than accepting
-    // writes that an empty provider would silently discard.
-    settings.setLocalStorageEnabled(false);
-    settings.setSessionStorageEnabled(false);
-    settings.setCookieEnabled(false);
+    settings.setLocalStorageEnabled(true);
+    settings.setSessionStorageEnabled(true);
+    settings.setCookieEnabled(true);
     settings.setAcceleratedCompositingEnabled(false);
 #if ENABLE(VIDEO)
     settings.setMediaEnabled(false);
@@ -579,7 +583,9 @@ extern "C" int32_t scarlet_webview_mouse(ScarletWebView* view, const SWVMouseEve
         static_cast<int>(input->click_count), modifiers(input->modifiers), MonotonicTime::now(), 0, SyntheticClickType::NoTap, MouseEventInputSource::UserDriven,
         mousePointerID, delta };
     event.setButtons(view->pressedButtons);
-    view->loadState.needsPaint = true;
+    // Hover/selection/DOM changes invalidate through ChromeClient. Merely
+    // moving the pointer must not repaint the entire pixel surface.
+    view->loadState.needsRenderingUpdate = true;
     auto& handler = view->frame->eventHandler();
     auto result = input->kind == SWV_MOUSE_MOVE ? handler.mouseMoved(event)
         : input->kind == SWV_MOUSE_DOWN ? handler.handleMousePressEvent(event) : handler.handleMouseReleaseEvent(event);

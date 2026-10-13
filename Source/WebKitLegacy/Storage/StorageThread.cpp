@@ -24,6 +24,7 @@
  */
 
 #include "StorageThread.h"
+#include <wtf/CheckedPtr.h>
 
 #include <wtf/AutodrainedPool.h>
 #include <wtf/HashSet.h>
