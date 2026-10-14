@@ -8,6 +8,7 @@
 #ifndef GrVkUtil_DEFINED
 #define GrVkUtil_DEFINED
 
+#include <cstdio>
 #include "include/private/SkAssert.h"
 #include "include/private/SkDebug.h"
 #include "include/private/SkMacros.h"
@@ -64,6 +65,9 @@ struct ProgramSettings;
 #define GR_VK_CALL_RESULT_NOCHECK(GPU, RESULT, X)     \
     do {                                              \
         (RESULT) = GR_VK_CALL(GPU->vkInterface(), X); \
+        if ((RESULT) != VK_SUCCESS && (RESULT) != VK_NOT_READY && (RESULT) != VK_TIMEOUT) { \
+            std::fprintf(stderr, "SKIA_VULKAN_API_FAIL %s result=%d\n", #X, int(RESULT)); \
+        } \
         GPU->checkVkResult(RESULT);                   \
     } while (false)
 
