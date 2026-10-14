@@ -240,7 +240,13 @@ private:
     void rootFrameAdded(const LocalFrame&) final { repaint(__func__); }
     void rootFrameRemoved(const LocalFrame&) final { repaint(__func__); }
     void mainFrameDidChange() final { repaint(__func__); }
-    void didFinishLoadingImageForElement(HTMLImageElement&) final { repaint(__func__); }
+    void didFinishLoadingImageForElement(HTMLImageElement&) final
+    {
+        // Page delivers this UI/image-analysis observation in a queued task.
+        // RenderImage::imageChanged has already invalidated the decoded pixels
+        // or layout through the renderer's normal repaint path. The embedding
+        // has no image-analysis delegate; this notification adds no damage.
+    }
     void didFinishLoadingImageForSVGImage(SVGImageElement&) final { repaint(__func__); }
     void contentsSizeChanged(LocalFrame&, const IntSize&) const final { repaint(__func__); }
     void intrinsicContentsSizeChanged(const IntSize&) const final { repaint(__func__); }
