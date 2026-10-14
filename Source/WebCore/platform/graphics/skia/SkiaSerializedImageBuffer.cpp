@@ -35,18 +35,10 @@
 #include "SkiaUtilities.h"
 #include "NativeImage.h"
 #include "PlatformDisplay.h"
+#include "SkiaGpuContext.h"
 #include <wtf/TZoneMallocInlines.h>
 
 namespace WebCore {
-static bool prepareSkiaContext()
-{
-#if PLATFORM(SCARLET)
-    return PlatformDisplay::sharedDisplay().prepareSkiaContext();
-#else
-    auto* context = PlatformDisplay::sharedDisplay().skiaGLContext();
-    return context && context->makeContextCurrent();
-#endif
-}
 
 WTF_MAKE_TZONE_ALLOCATED_IMPL(SkiaSerializedImageBuffer);
 

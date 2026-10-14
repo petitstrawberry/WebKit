@@ -38,6 +38,7 @@
 #include "PixelBuffer.h"
 #include "PixelBufferConversion.h"
 #include "PlatformDisplay.h"
+#include "SkiaGpuContext.h"
 #include "ProcessCapabilities.h"
 #include "SkiaRecordingResult.h"
 #include "SkiaUtilities.h"
@@ -59,15 +60,6 @@ WTF_IGNORE_WARNINGS_IN_THIRD_PARTY_CODE_END
 #endif
 
 namespace WebCore {
-static bool prepareSkiaContext()
-{
-#if PLATFORM(SCARLET)
-    return PlatformDisplay::sharedDisplay().prepareSkiaContext();
-#else
-    auto* context = PlatformDisplay::sharedDisplay().skiaGLContext();
-    return context && context->makeContextCurrent();
-#endif
-}
 
 // A canvas proxy that delegates all drawing operations to a single target canvas,
 // which can be dynamically switched. This allows GraphicsContextSkia to hold a

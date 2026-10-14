@@ -33,6 +33,7 @@
 #include "GraphicsContextSkia.h"
 #include "PixelBuffer.h"
 #include "PlatformDisplay.h"
+#include "SkiaGpuContext.h"
 WTF_IGNORE_WARNINGS_IN_THIRD_PARTY_CODE_BEGIN // GLib/Win ports
 #include <skia/core/SkColorSpace.h>
 #include <skia/core/SkImage.h>
@@ -40,15 +41,6 @@ WTF_IGNORE_WARNINGS_IN_THIRD_PARTY_CODE_BEGIN // GLib/Win ports
 WTF_IGNORE_WARNINGS_IN_THIRD_PARTY_CODE_END
 
 namespace WebCore {
-static bool prepareSkiaContext()
-{
-#if PLATFORM(SCARLET)
-    return PlatformDisplay::sharedDisplay().prepareSkiaContext();
-#else
-    auto* context = PlatformDisplay::sharedDisplay().skiaGLContext();
-    return context && context->makeContextCurrent();
-#endif
-}
 
 RefPtr<NativeImage> NativeImage::create(PlatformImagePtr&& platformImage, std::optional<GainMap>&& gainMap, GrDirectContext* grContext)
 {

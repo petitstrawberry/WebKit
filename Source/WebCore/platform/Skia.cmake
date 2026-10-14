@@ -32,6 +32,7 @@ list(APPEND WebCore_PRIVATE_FRAMEWORK_HEADERS
     platform/graphics/skia/SkiaSpanExtras.h
     platform/graphics/skia/SkiaSystemFallbackFontCache.h
     platform/graphics/skia/SkiaTextureAtlasPacker.h
+    platform/graphics/skia/SkiaGpuContext.h
     platform/graphics/skia/SkiaGpuFence.h
     platform/graphics/skia/SkiaUtilities.h
 )

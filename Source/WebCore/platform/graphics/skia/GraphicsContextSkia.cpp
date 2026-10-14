@@ -42,6 +42,7 @@
 #include "PathSegment.h"
 #include "Pattern.h"
 #include "PlatformDisplay.h"
+#include "SkiaGpuContext.h"
 #include "ProcessCapabilities.h"
 #include "SkiaImageAtlasLayoutBuilder.h"
 #include "SkiaPaintingEngine.h"
@@ -71,15 +72,6 @@ WTF_IGNORE_WARNINGS_IN_THIRD_PARTY_CODE_END
 #endif
 
 namespace WebCore {
-static bool prepareSkiaContext()
-{
-#if PLATFORM(SCARLET)
-    return PlatformDisplay::sharedDisplay().prepareSkiaContext();
-#else
-    auto* context = PlatformDisplay::sharedDisplay().skiaGLContext();
-    return context && context->makeContextCurrent();
-#endif
-}
 
 static sk_sp<SkColorSpace> skColorSpaceForColorSpace(ColorSpaceName colorSpace)
 {
