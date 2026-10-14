@@ -336,6 +336,12 @@ extern "C" int32_t scarlet_webview_shutdown()
     if (!views.empty())
         return SWV_FAILED;
     closeScarletStorage();
+#if USE(SKIA)
+    {
+        JSC::JSLockHolder locker(commonVM());
+        commonVM().heap.collectNow(JSC::Sync, JSC::CollectionScope::Full);
+    }
+#endif
     WTF::RunLoop::cycle();
     pthread_mutex_lock(&initializationMutex);
     terminationVM = nullptr;
@@ -666,6 +672,7 @@ extern "C" int32_t scarlet_webview_gpu_frame(ScarletWebView* view, SWVGpuFrame* 
             slot.width = view->width; slot.height = view->height;
         }
         view->surface = slot.surface.get();
+        view->loadState.needsPaint = true; // This free target may contain an older revision.
         status = paint(*view);
         if (status != SWV_OK) return status;
         auto handle = slot.surface->duplicateHandle();
