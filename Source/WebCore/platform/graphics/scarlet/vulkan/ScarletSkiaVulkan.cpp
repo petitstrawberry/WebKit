@@ -1,5 +1,7 @@
 // Native Ganesh Vulkan device and owned shared GPU surfaces.
+#include "cmakeconfig.h"
 #include "ScarletSkiaVulkan.h"
+#include <wtf/RedBlackTree.h>
 #include <skia/core/SkCanvas.h>
 #include <skia/core/SkColorSpace.h>
 #include <skia/core/SkPaint.h>
@@ -453,8 +455,62 @@ static int probePlanarYUVGPU(ScarletSkiaVulkan& owner, bool nv12)
     return 0;
 }
 
+
+// Probe-only regression using the generic RunLoop scheduled-task node type.
+class RemovedTimerProbeNode final : public WTF::RedBlackTree<RemovedTimerProbeNode, unsigned>::ThreadSafeNode {
+    WTF_MAKE_TZONE_ALLOCATED_INLINE(RemovedTimerProbeNode);
+    WTF_OVERRIDE_DELETE_FOR_CHECKED_PTR(RemovedTimerProbeNode);
+public:
+    explicit RemovedTimerProbeNode(unsigned key) : m_key(key) { }
+    unsigned key() const { return m_key; }
+private:
+    unsigned m_key;
+};
+
+static int probeRemovedTimerNodes()
+{
+    for (unsigned children = 1; children <= 2; ++children) {
+        WTF::RedBlackTree<RemovedTimerProbeNode, unsigned> tree;
+        auto* retained = new RemovedTimerProbeNode(2);
+        tree.insert(retained);
+        tree.insert(new RemovedTimerProbeNode(1));
+        if (children == 2)
+            tree.insert(new RemovedTimerProbeNode(3));
+        tree.remove(retained);
+        while (auto* node = tree.first()) {
+            tree.remove(node);
+            delete node;
+        }
+        // Old checked child links refer to now-zeroed former children.
+        // Destroying the retained node must not access those dead objects.
+        delete retained;
+    }
+    WTF::RedBlackTree<RemovedTimerProbeNode, unsigned> tree;
+    auto* retained = new RemovedTimerProbeNode(2);
+    tree.insert(retained);
+    tree.insert(new RemovedTimerProbeNode(1));
+    tree.insert(new RemovedTimerProbeNode(3));
+    tree.remove(retained);
+    tree.insert(retained);
+    unsigned expected = 1;
+    bool ordered = true;
+    for (auto* node = tree.first(); node; node = node->successor())
+        ordered &= node->key() == expected++;
+    while (auto* node = tree.first()) {
+        tree.remove(node);
+        delete node;
+    }
+    if (!ordered || expected != 4) {
+        std::fprintf(stderr, "SKIA_VULKAN_FAIL removed timer node reinsertion order\n");
+        return 22;
+    }
+    std::fprintf(stderr, "SKIA_VULKAN_PASS removed timer nodes one-child two-child delayed-destruction reinsertion\n");
+    return 0;
+}
+
 int probe()
 {
+    if (auto status = probeRemovedTimerNodes()) return status;
     char scalar[kSkStrAppendScalar_MaxSize + 1];
     auto* scalarEnd = SkStrAppendScalar(scalar, 1.25f);
     *scalarEnd = '\0';

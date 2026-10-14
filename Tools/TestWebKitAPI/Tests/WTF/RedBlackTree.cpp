@@ -499,4 +499,66 @@ TEST_F(RedBlackTreeTest, IterateBackgroundThread)
     EXPECT_TRUE(greaterThan55.contains(300));
 }
 
+
+class RemovalTestThreadSafeNode final : public RedBlackTree<RemovalTestThreadSafeNode, char>::ThreadSafeNode {
+    WTF_MAKE_TZONE_ALLOCATED_INLINE(RemovalTestThreadSafeNode);
+    WTF_OVERRIDE_DELETE_FOR_CHECKED_PTR(RemovalTestThreadSafeNode);
+public:
+    RemovalTestThreadSafeNode(char key, unsigned) : m_key(key) { }
+    char key() const { return m_key; }
+private:
+    char m_key;
+};
+
+template<typename Node> static void testRemovedNodeDestruction(bool twoChildren)
+{
+    RedBlackTree<Node, char> tree;
+    auto* retained = new Node('b', 0);
+    tree.insert(retained);
+    tree.insert(new Node('a', 0));
+    if (twoChildren)
+        tree.insert(new Node('c', 0));
+    EXPECT_EQ(tree.remove(retained), retained);
+    EXPECT_EQ(retained->predecessor(), nullptr);
+    EXPECT_EQ(retained->successor(), nullptr);
+    // Unrelated stopped timers can die before the timer whose task was removed.
+    while (auto* node = tree.first()) {
+        tree.remove(node);
+        EXPECT_EQ(node->checkedPtrCount(), 0u);
+        delete node;
+    }
+    delete retained;
+}
+
+TEST_F(RedBlackTreeTest, RemovedNodeOutlivesFormerChildren)
+{
+    testRemovedNodeDestruction<TestNode>(false);
+    testRemovedNodeDestruction<TestNode>(true);
+    testRemovedNodeDestruction<RemovalTestThreadSafeNode>(false);
+    testRemovedNodeDestruction<RemovalTestThreadSafeNode>(true);
+}
+
+TEST_F(RedBlackTreeTest, RemovedNodeCanBeReinserted)
+{
+    RedBlackTree<TestNode, char> tree;
+    auto* retained = new TestNode('b', 0);
+    tree.insert(retained);
+    tree.insert(new TestNode('a', 0));
+    tree.insert(new TestNode('c', 0));
+    EXPECT_EQ(tree.remove(retained), retained);
+    tree.insert(retained);
+    Vector<char> keys;
+    for (auto* node = tree.first(); node; node = node->successor())
+        keys.append(node->key());
+    ASSERT_EQ(keys.size(), 3u);
+    EXPECT_EQ(keys[0], 'a');
+    EXPECT_EQ(keys[1], 'b');
+    EXPECT_EQ(keys[2], 'c');
+    while (auto* node = tree.first()) {
+        tree.remove(node);
+        EXPECT_EQ(node->checkedPtrCount(), 0u);
+        delete node;
+    }
+}
+
 } // namespace TestWebKitAPI

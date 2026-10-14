@@ -286,6 +286,8 @@ public:
         } else if (y->color() == Black)
             removeFixup(x, xParent);
 
+        // A detached node must not keep checked pointers to live tree nodes.
+        z->reset();
         return z;
     }
     
