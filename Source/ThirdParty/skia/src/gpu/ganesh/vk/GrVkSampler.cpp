@@ -125,7 +125,7 @@ GrVkSampler* GrVkSampler::Create(GrVkGpu* gpu,
     VkResult result;
     GR_VK_CALL_RESULT(gpu, result, CreateSampler(gpu->device(), &createInfo, nullptr, &sampler));
     if (result != VK_SUCCESS) {
-        ycbcrConversion->unref();
+        SkSafeUnref(ycbcrConversion);
         return nullptr;
     }
 
