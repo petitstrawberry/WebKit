@@ -464,7 +464,7 @@ void MediaPlayerPrivateScarlet::updateStatus()
         player->playbackStateChanged();
     if (old.ended != status.ended)
         player->timeChanged();
-    if (m_seekPromise && m_seekReadyForCompletion && status.ready_state >= static_cast<unsigned>(MediaPlayer::ReadyState::HaveCurrentData)) {
+    if (m_seekPromise && m_seekReadyForCompletion && (status.ready_state >= static_cast<unsigned>(MediaPlayer::ReadyState::HaveCurrentData) || status.ended)) {
         auto seek = std::exchange(m_seekPromise, std::nullopt);
         auto target = std::exchange(m_seekTarget, MediaTime::invalidTime());
         seek->resolve(target);
@@ -612,6 +612,12 @@ Ref<MediaTimePromise> MediaPlayerPrivateScarlet::seekToTarget(const SeekTarget& 
 {
     if (!m_session)
         return MediaTimePromise::createAndReject(PlatformMediaError::NotReady);
+    bool isMediaSource = false;
+#if ENABLE(MEDIA_SOURCE)
+    isMediaSource = !!m_mediaSource;
+#endif
+    if (!isMediaSource && !m_buffered.contain(target.time) && (m_packets.isEmpty() || target.time != duration()))
+        return MediaTimePromise::createAndReject(PlatformMediaError::NotReady);
     auto seekGeneration = ++m_seekGeneration;
     m_seekPromise.emplace(PlatformMediaError::Cancelled);
     auto seekPromise = m_seekPromise->promise();
@@ -648,11 +654,6 @@ Ref<MediaTimePromise> MediaPlayerPrivateScarlet::seekToTarget(const SeekTarget& 
         return seekPromise;
     }
 #endif
-    if (!m_buffered.contain(target.time) && (m_packets.isEmpty() || target.time != duration())) {
-        m_seekTarget = MediaTime::invalidTime();
-        m_seekPromise.reset();
-        return MediaTimePromise::createAndReject(PlatformMediaError::NotReady);
-    }
     MediaTime start = MediaTime::zeroTime();
     for (auto& sample : m_packets) {
         auto track = m_tracks.find(sample->trackID());
