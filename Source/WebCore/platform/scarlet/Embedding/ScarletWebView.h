@@ -131,6 +131,20 @@ int32_t scarlet_webview_text_content(ScarletWebView*, SWVBytes element_id, SWVBy
 typedef struct SWVPaintStatistics { uint64_t paints; uint64_t painted_pixels; } SWVPaintStatistics;
 int32_t scarlet_webview_paint_statistics(ScarletWebView*, SWVPaintStatistics*);
 
+/* Read-only video inspection on the view owner. Enumerates actual HTML video
+ * elements in the main Document, excluding subframes and shadow trees.
+ * Natural dimensions are video pixels; rectangles are CSS viewport units.
+ * Duration retains DOM NaN/infinity for unknown or live media. Counters are
+ * actual MediaPlayer decoder/drop and compositor-submission statistics. */
+typedef struct ScarletWebViewMediaStatistics {
+    uint32_t video_count, width, height, paused, ended, ready_state;
+    uint64_t decoded_frames, dropped_frames, presented_frames;
+    double current_time, duration, rect_x, rect_y, rect_width, rect_height;
+} ScarletWebViewMediaStatistics;
+/* SWV_EMPTY: no video element; SWV_INVALID_ARGUMENT: index outside a nonempty
+ * collection. video_count remains populated in either case. */
+int32_t scarlet_webview_media_statistics(ScarletWebView*, uint32_t index, ScarletWebViewMediaStatistics*);
+
 #ifdef __cplusplus
 }
 #endif

@@ -18,6 +18,12 @@
 #include "Document.h"
 #include "DocumentView.h"
 #include "Element.h"
+#if ENABLE(VIDEO)
+#include "DOMRect.h"
+#include "HTMLCollection.h"
+#include "HTMLVideoElement.h"
+#include "MediaPlayer.h"
+#endif
 #include "EmptyClients.h"
 #include "EventHandler.h"
 #include "FocusController.h"
@@ -474,7 +480,11 @@ extern "C" int32_t scarlet_webview_create(const SWVConfiguration* configuration,
     settings.setCookieEnabled(true);
     settings.setAcceleratedCompositingEnabled(false);
 #if ENABLE(VIDEO)
-    settings.setMediaEnabled(USE(SCARLET_MEDIA));
+    #if USE(SCARLET_MEDIA)
+    settings.setMediaEnabled(true);
+#else
+    settings.setMediaEnabled(false);
+#endif
 #endif
     settings.setStandardFontFamily("serif"_s);
     settings.setSerifFontFamily("serif"_s);
@@ -917,6 +927,56 @@ extern "C" int32_t scarlet_webview_complete_request(ScarletWebView* view, const 
     if (result == SWV_OK || result == SWV_FAILED)
         view->loadState.needsRenderingUpdate = true;
     return result;
+}
+
+extern "C" int32_t scarlet_webview_media_statistics(ScarletWebView* view, uint32_t index, ScarletWebViewMediaStatistics* out)
+{
+    auto status = viewStatus(view);
+    if (status != SWV_OK)
+        return status;
+    if (!out)
+        return SWV_INVALID_ARGUMENT;
+    *out = { };
+#if ENABLE(VIDEO)
+    RefPtr document = view->frame->document();
+    if (!document)
+        return SWV_EMPTY;
+    auto elements = document->getElementsByTagName(AtomString { "video"_s });
+    RefPtr<HTMLVideoElement> video;
+    for (unsigned i = 0; i < elements->length(); ++i) {
+        RefPtr candidate = dynamicDowncast<HTMLVideoElement>(elements->item(i));
+        if (!candidate)
+            continue;
+        if (out->video_count == index)
+            video = candidate;
+        ++out->video_count;
+    }
+    if (!out->video_count)
+        return SWV_EMPTY;
+    if (!video)
+        return SWV_INVALID_ARGUMENT;
+    out->width = video->videoWidth();
+    out->height = video->videoHeight();
+    out->paused = video->paused();
+    out->ended = video->ended();
+    out->ready_state = static_cast<uint32_t>(video->readyState());
+    out->current_time = video->currentTime();
+    out->duration = video->duration();
+    auto rectangle = video->getBoundingClientRect();
+    out->rect_x = rectangle->x();
+    out->rect_y = rectangle->y();
+    out->rect_width = rectangle->width();
+    out->rect_height = rectangle->height();
+    if (RefPtr player = video->player()) {
+        out->decoded_frames = player->decodedFrameCount();
+        out->dropped_frames = player->droppedFrameCount();
+        if (auto metrics = player->videoPlaybackQualityMetrics())
+            out->presented_frames = metrics->displayCompositedVideoFrames;
+    }
+    return SWV_OK;
+#else
+    return SWV_UNSUPPORTED;
+#endif
 }
 
 extern "C" int32_t scarlet_webview_paint_statistics(ScarletWebView* view, SWVPaintStatistics* out)
