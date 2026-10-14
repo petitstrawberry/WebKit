@@ -69,6 +69,7 @@
 #include <array>
 #include <fontconfig/fontconfig.h>
 #include <atomic>
+#include <cerrno>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -77,6 +78,7 @@
 #include <pthread.h>
 #include <span>
 #include <string>
+#include <sys/stat.h>
 #include <unordered_set>
 #include <vector>
 
@@ -125,6 +127,42 @@ std::atomic<bool> initialized { false };
 std::atomic<bool> shutDown { false };
 JSC::VM* terminationVM { nullptr }; // Published/revoked under initializationMutex.
 std::unordered_set<ScarletWebView*> views;
+
+bool ensureFontCacheDirectory(const std::string& path)
+{
+    if (path.empty())
+        return false;
+    // Create only missing components. Existing directories (including their
+    // permissions) and non-directory paths are never changed.
+    for (size_t end = 1; end <= path.size(); ++end) {
+        if (end != path.size() && path[end] != '/')
+            continue;
+        std::string component = path.substr(0, end);
+        struct stat info;
+        if (!stat(component.c_str(), &info)) {
+            if (!S_ISDIR(info.st_mode))
+                return false;
+            continue;
+        }
+        if (errno != ENOENT)
+            return false;
+        if (mkdir(component.c_str(), 0755) && errno != EEXIST)
+            return false;
+        if (stat(component.c_str(), &info) || !S_ISDIR(info.st_mode))
+            return false;
+    }
+    return true;
+}
+
+void prepareFontCacheDirectories(FcConfig* fonts)
+{
+    FcStrList* directories = FcConfigGetCacheDirs(fonts);
+    if (!directories)
+        return;
+    while (const FcChar8* directory = FcStrListNext(directories))
+        ensureFontCacheDirectory(reinterpret_cast<const char*>(directory));
+    FcStrListDone(directories);
+}
 
 bool validBytes(SWVBytes bytes, size_t limit)
 {
@@ -303,8 +341,13 @@ extern "C" int32_t scarlet_webview_initialize(SWVBytes fontPath)
         return SWV_INVALID_ARGUMENT;
     }
     FcConfig* fonts = FcConfigCreate();
-    bool validFonts = fonts && FcConfigParseAndLoad(fonts, reinterpret_cast<const FcChar8*>(path.c_str()), FcTrue)
-        && FcConfigBuildFonts(fonts) && FcConfigSetCurrent(fonts);
+    bool validFonts = fonts && FcConfigParseAndLoad(fonts, reinterpret_cast<const FcChar8*>(path.c_str()), FcTrue);
+    if (validFonts) {
+        // The configured cache may be on a freshly mounted tmpfs. Use Scarlet's
+        // supported directory mode before Fontconfig builds its own caches.
+        prepareFontCacheDirectories(fonts);
+        validFonts = FcConfigBuildFonts(fonts) && FcConfigSetCurrent(fonts);
+    }
     if (fonts)
         FcConfigDestroy(fonts);
     if (!validFonts) {
