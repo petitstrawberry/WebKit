@@ -2507,10 +2507,16 @@ bool GrVkGpu::onReadPixels(GrSurface* surface,
                            void* buffer,
                            size_t rowBytes) {
     if (surface->isProtected()) {
+        #if defined(__scarlet__)
+        SkDebugf("SKIA_READPIXELS_FAIL %s:%d\n", __func__, __LINE__);
+#endif
         return false;
     }
 
     if (!this->currentCommandBuffer()) {
+        #if defined(__scarlet__)
+        SkDebugf("SKIA_READPIXELS_FAIL %s:%d\n", __func__, __LINE__);
+#endif
         return false;
     }
 
@@ -2521,7 +2527,10 @@ bool GrVkGpu::onReadPixels(GrSurface* surface,
         // it would require us to know the VkImage, which we don't have, as well as need us to
         // stop and start the VkRenderPass which we don't have access to.
         if (rt->wrapsSecondaryCommandBuffer()) {
-            return false;
+            #if defined(__scarlet__)
+        SkDebugf("SKIA_READPIXELS_FAIL %s:%d\n", __func__, __LINE__);
+#endif
+        return false;
         }
         image = rt->nonMSAAAttachment();
     } else {
@@ -2529,11 +2538,17 @@ bool GrVkGpu::onReadPixels(GrSurface* surface,
     }
 
     if (!image) {
+        #if defined(__scarlet__)
+        SkDebugf("SKIA_READPIXELS_FAIL %s:%d\n", __func__, __LINE__);
+#endif
         return false;
     }
 
     if (dstColorType == GrColorType::kUnknown ||
         dstColorType != this->vkCaps().transferColorType(image->imageFormat(), surfaceColorType)) {
+        #if defined(__scarlet__)
+        SkDebugf("SKIA_READPIXELS_FAIL %s:%d\n", __func__, __LINE__);
+#endif
         return false;
     }
 
@@ -2546,6 +2561,9 @@ bool GrVkGpu::onReadPixels(GrSurface* surface,
 
     size_t bpp = GrColorTypeBytesPerPixel(dstColorType);
     if (skgpu::VkFormatBytesPerBlock(image->imageFormat()) != bpp) {
+        #if defined(__scarlet__)
+        SkDebugf("SKIA_READPIXELS_FAIL %s:%d\n", __func__, __LINE__);
+#endif
         return false;
     }
     size_t tightRowBytes = bpp*rect.width();
@@ -2562,6 +2580,9 @@ bool GrVkGpu::onReadPixels(GrSurface* surface,
     size_t imageRows = region.imageExtent.height;
     size_t size = safe.mul(transBufferRowBytes, imageRows);
     if (!safe.ok() || size == 0) {
+        #if defined(__scarlet__)
+        SkDebugf("SKIA_READPIXELS_FAIL %s:%d\n", __func__, __LINE__);
+#endif
         return false;
     }
     GrResourceProvider* resourceProvider = this->getContext()->priv().resourceProvider();
@@ -2572,6 +2593,9 @@ bool GrVkGpu::onReadPixels(GrSurface* surface,
             GrResourceProvider::ZeroInit::kNo);
 
     if (!transferBuffer) {
+        #if defined(__scarlet__)
+        SkDebugf("SKIA_READPIXELS_FAIL %s:%d\n", __func__, __LINE__);
+#endif
         return false;
     }
 
@@ -2602,10 +2626,16 @@ bool GrVkGpu::onReadPixels(GrSurface* surface,
     GrSubmitInfo submitInfo;
     submitInfo.fSync = GrSyncCpu::kYes;
     if (!this->submitCommandBuffer(submitInfo)) {
+        #if defined(__scarlet__)
+        SkDebugf("SKIA_READPIXELS_FAIL %s:%d\n", __func__, __LINE__);
+#endif
         return false;
     }
     void* mappedMemory = transferBuffer->map();
     if (!mappedMemory) {
+        #if defined(__scarlet__)
+        SkDebugf("SKIA_READPIXELS_FAIL %s:%d\n", __func__, __LINE__);
+#endif
         return false;
     }
 

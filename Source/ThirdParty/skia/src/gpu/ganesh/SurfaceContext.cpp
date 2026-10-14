@@ -103,22 +103,37 @@ bool SurfaceContext::readPixels(GrDirectContext* dContext, GrPixmap dst, SkIPoin
     GR_CREATE_TRACE_MARKER_CONTEXT("SurfaceContext", "readPixels", fContext);
 
     if (!fContext->priv().matches(dContext)) {
+        #if defined(__scarlet__)
+        SkDebugf("SKIA_READPIXELS_FAIL %s:%d\n", __func__, __LINE__);
+#endif
         return false;
     }
 
     if (dst.colorType() == GrColorType::kUnknown) {
+        #if defined(__scarlet__)
+        SkDebugf("SKIA_READPIXELS_FAIL %s:%d\n", __func__, __LINE__);
+#endif
         return false;
     }
 
     if (dst.rowBytes() % dst.info().bpp()) {
+        #if defined(__scarlet__)
+        SkDebugf("SKIA_READPIXELS_FAIL %s:%d\n", __func__, __LINE__);
+#endif
         return false;
     }
 
     dst = dst.clip(this->dimensions(), &pt);
     if (!dst.hasPixels()) {
+        #if defined(__scarlet__)
+        SkDebugf("SKIA_READPIXELS_FAIL %s:%d\n", __func__, __LINE__);
+#endif
         return false;
     }
     if (!alpha_types_compatible(this->colorInfo().alphaType(), dst.alphaType())) {
+        #if defined(__scarlet__)
+        SkDebugf("SKIA_READPIXELS_FAIL %s:%d\n", __func__, __LINE__);
+#endif
         return false;
     }
     // We allow unknown alpha types but only if both src and dst are unknown. Otherwise, it's too
@@ -127,11 +142,17 @@ bool SurfaceContext::readPixels(GrDirectContext* dContext, GrPixmap dst, SkIPoin
     sk_sp<GrSurfaceProxy> srcProxy = this->asSurfaceProxyRef();
 
     if (srcProxy->framebufferOnly()) {
+        #if defined(__scarlet__)
+        SkDebugf("SKIA_READPIXELS_FAIL %s:%d\n", __func__, __LINE__);
+#endif
         return false;
     }
 
     // MDB TODO: delay this instantiation until later in the method
     if (!srcProxy->instantiate(dContext->priv().resourceProvider())) {
+        #if defined(__scarlet__)
+        SkDebugf("SKIA_READPIXELS_FAIL %s:%d\n", __func__, __LINE__);
+#endif
         return false;
     }
 
@@ -169,6 +190,9 @@ bool SurfaceContext::readPixels(GrDirectContext* dContext, GrPixmap dst, SkIPoin
 
     auto readFlag = caps->surfaceSupportsReadPixels(srcSurface);
     if (readFlag == GrCaps::SurfaceReadPixelsSupport::kUnsupported) {
+        #if defined(__scarlet__)
+        SkDebugf("SKIA_READPIXELS_FAIL %s:%d\n", __func__, __LINE__);
+#endif
         return false;
     }
 
@@ -195,7 +219,10 @@ bool SurfaceContext::readPixels(GrDirectContext* dContext, GrPixmap dst, SkIPoin
             auto sfc = dContext->priv().makeSFC(
                     tempInfo, "SurfaceContext_ReadPixels", SkBackingFit::kApprox);
             if (!sfc) {
-                return false;
+                #if defined(__scarlet__)
+        SkDebugf("SKIA_READPIXELS_FAIL %s:%d\n", __func__, __LINE__);
+#endif
+        return false;
             }
 
             std::unique_ptr<GrFragmentProcessor> fp;
@@ -212,7 +239,10 @@ bool SurfaceContext::readPixels(GrDirectContext* dContext, GrPixmap dst, SkIPoin
                 fp = GrTextureEffect::Make(this->readSurfaceView(), this->colorInfo().alphaType());
             }
             if (!fp) {
-                return false;
+                #if defined(__scarlet__)
+        SkDebugf("SKIA_READPIXELS_FAIL %s:%d\n", __func__, __LINE__);
+#endif
+        return false;
             }
             sfc->fillRectToRectWithFP(SkIRect::MakePtSize(pt, dst.dimensions()),
                                       SkIRect::MakeSize(dst.dimensions()),
@@ -248,7 +278,10 @@ bool SurfaceContext::readPixels(GrDirectContext* dContext, GrPixmap dst, SkIPoin
                 pt = {0, 0};
             }
             if (!copy) {
-                return false;
+                #if defined(__scarlet__)
+        SkDebugf("SKIA_READPIXELS_FAIL %s:%d\n", __func__, __LINE__);
+#endif
+        return false;
             }
             GrSurfaceProxyView view{std::move(copy), this->origin(), this->readSwizzle()};
             tempCtx = dContext->priv().makeSC(std::move(view), this->colorInfo());
@@ -281,7 +314,10 @@ bool SurfaceContext::readPixels(GrDirectContext* dContext, GrPixmap dst, SkIPoin
         SkSafeMath safe;
         size_t size = safe.mul(tmpRB, tmpInfo.height());
         if (!safe.ok()) {
-            return false;
+            #if defined(__scarlet__)
+        SkDebugf("SKIA_READPIXELS_FAIL %s:%d\n", __func__, __LINE__);
+#endif
+        return false;
         }
         // Chrome MSAN bots require the data to be initialized (hence the ()).
         tmpPixels = std::make_unique<char[]>(size);
@@ -296,6 +332,9 @@ bool SurfaceContext::readPixels(GrDirectContext* dContext, GrPixmap dst, SkIPoin
             dContext->priv().drawingManager()->getLastRenderTask(srcProxy.get()) != nullptr;
     GrSemaphoresSubmitted flushResult = dContext->priv().flushSurface(srcProxy.get());
     if (flushResult == GrSemaphoresSubmitted::kNo && hasPendingTasks) {
+        #if defined(__scarlet__)
+        SkDebugf("SKIA_READPIXELS_FAIL %s:%d\n", __func__, __LINE__);
+#endif
         return false;
     }
     dContext->submit();
@@ -305,6 +344,9 @@ bool SurfaceContext::readPixels(GrDirectContext* dContext, GrPixmap dst, SkIPoin
                                                supportedRead.fColorType,
                                                readDst,
                                                readRB)) {
+        #if defined(__scarlet__)
+        SkDebugf("SKIA_READPIXELS_FAIL %s:%d\n", __func__, __LINE__);
+#endif
         return false;
     }
 

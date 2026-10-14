@@ -263,9 +263,13 @@ int probe()
     owner.surface->getCanvas()->drawRect(SkRect::MakeXYWH(16, 16, 32, 32), paint);
     paint.setColor(SK_ColorBLUE);
     owner.surface->getCanvas()->drawRect(SkRect::MakeXYWH(64, 32, 32, 32), paint);
-    owner.context->flushAndSubmit(owner.surface.get(), GrSyncCpu::kYes);
+    owner.context->flush(owner.surface.get());
+    if (!owner.context->submit(GrSyncCpu::kYes)) {
+        std::fprintf(stderr, "SKIA_VULKAN_FAIL draw submit abandoned=%d\n", owner.context->abandoned());
+        return 18;
+    }
     std::vector<uint32_t> pixels(128 * 96);
-    if (!owner.surface->readPixels(imageInfo, pixels.data(), 128 * 4, 0, 0)) { std::fprintf(stderr, "SKIA_VULKAN_FAIL GPU readback\n"); return 9; }
+    if (!owner.surface->readPixels(imageInfo, pixels.data(), 128 * 4, 0, 0)) { std::fprintf(stderr, "SKIA_VULKAN_FAIL GPU readback abandoned=%d\n", owner.context->abandoned()); return 9; }
     // RGBA byte order, independent of Skia's native N32 order.
     auto* bytes = reinterpret_cast<const unsigned char*>(pixels.data());
     auto matches = [bytes](int x, int y, unsigned char r, unsigned char g, unsigned char b) {
