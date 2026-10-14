@@ -7,6 +7,9 @@
 #include <skia/gpu/ganesh/GrContextOptions.h>
 #include <skia/gpu/ganesh/SkSurfaceGanesh.h>
 #include <skia/gpu/ganesh/vk/GrVkDirectContext.h>
+#include <skia/gpu/ganesh/vk/GrVkBackendSurface.h>
+#include <skia/gpu/ganesh/vk/GrVkTypes.h>
+#include <skia/gpu/ganesh/GrBackendSurface.h>
 #include <skia/gpu/vk/VulkanBackendContext.h>
 #include <skia/gpu/vk/VulkanExtensions.h>
 #include <skia/gpu/vk/VulkanMemoryAllocator.h>
@@ -14,6 +17,7 @@
 #include <cstdio>
 #include <memory>
 #include <vector>
+#include <unistd.h>
 
 namespace {
 struct Dispatch {
@@ -120,6 +124,9 @@ public:
     {
         surface = nullptr;
         context = nullptr;
+        if (exportedHandle >= 0) close(exportedHandle);
+        if (sharedImage) dispatch.deviceFunction<PFN_vkDestroyImage>("vkDestroyImage")(dispatch.device, sharedImage, nullptr);
+        if (sharedMemory) allocator->freeMemory(sharedMemory);
         allocator = nullptr;
         if (dispatch.device) dispatch.deviceFunction<PFN_vkDestroyDevice>("vkDestroyDevice")(dispatch.device, nullptr);
         if (dispatch.instance) dispatch.instanceFunction<PFN_vkDestroyInstance>("vkDestroyInstance")(dispatch.instance, nullptr);
@@ -130,6 +137,9 @@ public:
     sk_sp<Allocator> allocator;
     sk_sp<GrDirectContext> context;
     sk_sp<SkSurface> surface;
+    VkImage sharedImage { };
+    skgpu::VulkanBackendMemory sharedMemory { };
+    int32_t exportedHandle { -1 };
 };
 
 int probe()
@@ -174,6 +184,8 @@ int probe()
     queueInfo.queueFamilyIndex = queueIndex; queueInfo.queueCount = 1; queueInfo.pQueuePriorities = &priority;
     VkDeviceCreateInfo deviceInfo { VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO };
     deviceInfo.queueCreateInfoCount = 1; deviceInfo.pQueueCreateInfos = &queueInfo;
+    const char* imageExtension = "VK_SGFX_scarlet_image";
+    deviceInfo.enabledExtensionCount = 1; deviceInfo.ppEnabledExtensionNames = &imageExtension;
     result = dispatch.instanceFunction<PFN_vkCreateDevice>("vkCreateDevice")(physical, &deviceInfo, nullptr, &dispatch.device);
     if (result != VK_SUCCESS) { std::fprintf(stderr, "SKIA_VULKAN_FAIL device: %d\n", result); return 6; }
     dispatch.deviceProc = dispatch.instanceFunction<PFN_vkGetDeviceProcAddr>("vkGetDeviceProcAddr");
@@ -188,7 +200,7 @@ int probe()
         return function;
     };
     skgpu::VulkanExtensions extensions;
-    extensions.init(backend.fGetProc, dispatch.instance, physical, 0, nullptr, 0, nullptr);
+    extensions.init(backend.fGetProc, dispatch.instance, physical, 0, nullptr, 1, &imageExtension);
     backend.fVkExtensions = &extensions;
     owner.allocator = sk_make_sp<Allocator>(dispatch, physical);
     backend.fMemoryAllocator = owner.allocator;
@@ -203,8 +215,38 @@ int probe()
     owner.context = GrDirectContexts::MakeVulkan(backend, options);
     if (!owner.context) { std::fprintf(stderr, "SKIA_VULKAN_FAIL Ganesh context\n"); return 7; }
     const auto imageInfo = SkImageInfo::Make(128, 96, kRGBA_8888_SkColorType, kPremul_SkAlphaType, SkColorSpace::MakeSRGB());
-    owner.surface = SkSurfaces::RenderTarget(owner.context.get(), skgpu::Budgeted::kNo, imageInfo);
-    if (!owner.surface) { std::fprintf(stderr, "SKIA_VULKAN_FAIL GPU surface\n"); return 8; }
+    // Export a bound, untouched Vulkan image before Ganesh can submit it.
+    // Wrap the same physical image, so the GPU draw/readback exercises the
+    // SGFX sharing path rather than a separate CPU copy of an internal surface.
+    VkImageCreateInfo imageCreate { VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO };
+    imageCreate.imageType = VK_IMAGE_TYPE_2D;
+    imageCreate.format = VK_FORMAT_B8G8R8A8_UNORM;
+    imageCreate.extent = { 128, 96, 1 };
+    imageCreate.mipLevels = imageCreate.arrayLayers = 1;
+    imageCreate.samples = VK_SAMPLE_COUNT_1_BIT;
+    imageCreate.tiling = VK_IMAGE_TILING_OPTIMAL;
+    imageCreate.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    imageCreate.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    if (dispatch.deviceFunction<PFN_vkCreateImage>("vkCreateImage")(dispatch.device, &imageCreate, nullptr, &owner.sharedImage) != VK_SUCCESS) return 11;
+    if (owner.allocator->allocateImageMemory(owner.sharedImage, 0, &owner.sharedMemory) != VK_SUCCESS) return 12;
+    GrVkImageInfo wrapped;
+    owner.allocator->getAllocInfo(owner.sharedMemory, &wrapped.fAlloc);
+    if (dispatch.deviceFunction<PFN_vkBindImageMemory>("vkBindImageMemory")(dispatch.device, owner.sharedImage, wrapped.fAlloc.fMemory, wrapped.fAlloc.fOffset) != VK_SUCCESS) return 13;
+    if (dispatch.deviceFunction<PFN_vkQueueWaitIdle>("vkQueueWaitIdle")(queue) != VK_SUCCESS) return 14;
+    using ExportImage = VkResult (*)(VkDevice, VkImage, int32_t*);
+    auto exportImage = dispatch.deviceFunction<ExportImage>("vkGetImageScarletHandleSGFX");
+    if (!exportImage || exportImage(dispatch.device, owner.sharedImage, &owner.exportedHandle) != VK_SUCCESS || owner.exportedHandle < 0) return 15;
+    wrapped.fImage = owner.sharedImage;
+    wrapped.fImageTiling = VK_IMAGE_TILING_OPTIMAL;
+    wrapped.fImageLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    wrapped.fFormat = imageCreate.format;
+    wrapped.fImageUsageFlags = imageCreate.usage;
+    wrapped.fSampleCount = 1;
+    wrapped.fLevelCount = 1;
+    wrapped.fCurrentQueueFamily = queueIndex;
+    auto renderTarget = GrBackendRenderTargets::MakeVk(128, 96, wrapped);
+    owner.surface = SkSurfaces::WrapBackendRenderTarget(owner.context.get(), renderTarget, kTopLeft_GrSurfaceOrigin, kBGRA_8888_SkColorType, SkColorSpace::MakeSRGB(), nullptr);
+    if (!owner.surface) { std::fprintf(stderr, "SKIA_VULKAN_FAIL shared GPU surface\n"); return 8; }
     owner.surface->getCanvas()->clear(SK_ColorWHITE);
     SkPaint paint; paint.setColor(SK_ColorRED);
     owner.surface->getCanvas()->drawRect(SkRect::MakeXYWH(16, 16, 32, 32), paint);
@@ -222,7 +264,7 @@ int probe()
     if (!matches(0, 0, 255, 255, 255) || !matches(24, 24, 255, 0, 0) || !matches(72, 40, 0, 0, 255)) {
         std::fprintf(stderr, "SKIA_VULKAN_FAIL GPU draw pixel mismatch\n"); return 10;
     }
-    std::fprintf(stderr, "SKIA_VULKAN_PASS Ganesh rectangles GPU readback, memory=%llu\n", static_cast<unsigned long long>(owner.allocator->totalAllocatedAndUsedMemory().first));
+    std::fprintf(stderr, "SKIA_VULKAN_PASS Ganesh rectangles on shared SGFX GPU image, handle=%d memory=%llu\n", owner.exportedHandle, static_cast<unsigned long long>(owner.allocator->totalAllocatedAndUsedMemory().first));
     return 0;
 }
 }
