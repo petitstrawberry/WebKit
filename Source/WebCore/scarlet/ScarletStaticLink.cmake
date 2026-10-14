@@ -17,6 +17,9 @@ endif ()
 # the memory/runtime bridges. The compiler driver supplies the Scarlet CRT and
 # C++/C runtimes afterwards; it never searches host headers or host libc.
 set(_scarlet_engine_targets WebCore PAL JavaScriptCore WTF)
+if (SCARLET_BUILD_VULKAN_PROBE)
+    list(APPEND _scarlet_engine_targets Skia ScarletSkiaVulkan)
+endif ()
 if (TARGET bmalloc)
     list(APPEND _scarlet_engine_targets bmalloc)
 endif ()

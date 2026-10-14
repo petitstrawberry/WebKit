@@ -55,9 +55,12 @@ if (USE_LIBWEBRTC)
     include_directories(${CMAKE_CURRENT_BINARY_DIR}/ThirdParty/libwebrtc)
 endif ()
 
-if (USE_SKIA)
+if (USE_SKIA OR SCARLET_BUILD_VULKAN_PROBE)
     add_subdirectory(ThirdParty/skia)
     webkit_scope_target_interface_definitions(Skia)
+    if (SCARLET_BUILD_VULKAN_PROBE)
+        add_subdirectory(WebCore/platform/graphics/scarlet/vulkan)
+    endif ()
 endif ()
 
 if (USE_SYSTEM_SYSPROF_CAPTURE)

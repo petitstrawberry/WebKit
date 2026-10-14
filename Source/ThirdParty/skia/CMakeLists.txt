@@ -853,7 +853,13 @@ else ()
     endif ()
 endif ()
 
-if (USE_LIBEPOXY)
+if (PORT STREQUAL "Scarlet")
+    # Scarlet uses Vulkan through its native loader, with no EGL dependency.
+    get_target_property(_skia_sources Skia SOURCES)
+    list(FILTER _skia_sources EXCLUDE REGEX "^src/gpu/ganesh/gl/")
+    set_property(TARGET Skia PROPERTY SOURCES "${_skia_sources}")
+    include(PlatformScarlet.cmake)
+elseif (USE_LIBEPOXY)
     target_sources(Skia PRIVATE src/gpu/ganesh/gl/epoxy/GrGLMakeEpoxyEGLInterface.cpp)
     target_link_libraries(Skia PRIVATE Epoxy::Epoxy)
 else ()
@@ -1066,8 +1072,10 @@ endif ()
 # Enable the Ganesh GPU renderer.
 #
 # FIXME: Support other combinations.
+if (NOT PORT STREQUAL "Scarlet")
+    target_compile_definitions(Skia PRIVATE SK_GL)
+endif ()
 target_compile_definitions(Skia PRIVATE
-    SK_GL
     SK_GANESH
     SK_GANESH_SMALL_PATH_DISTANCE_FIELD_ALWAYS
 )
