@@ -35,6 +35,10 @@
 #include <hb-icu.h>
 #include <hb-ot.h>
 #include <hb.h>
+#if PLATFORM(SCARLET)
+#include <wtf/NeverDestroyed.h>
+#include <wtf/ThreadSpecific.h>
+#endif
 
 namespace WebCore {
 
@@ -247,7 +251,14 @@ void ComplexTextController::collectComplexTextRunsForCharacters(std::span<const 
     if (isVertical)
         verticalGlyphSubstitutionScript = findScriptForVerticalGlyphSubstitution(hb_font_get_face(hbFont));
 
+#if PLATFORM(SCARLET)
+    static NeverDestroyed<ThreadSpecific<HbUniquePtr<hb_buffer_t>>> buffers;
+    auto& buffer = *buffers.get();
+    if (!buffer)
+        buffer.reset(hb_buffer_create());
+#else
     static thread_local HbUniquePtr<hb_buffer_t> buffer(hb_buffer_create());
+#endif
 
     // The computed "locale" equals the "lang" attribute. The latter must be a valid BCP 47 language tag,
     // according to <https://html.spec.whatwg.org/multipage/dom.html#attr-lang>.
