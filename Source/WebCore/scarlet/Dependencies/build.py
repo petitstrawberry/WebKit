@@ -261,6 +261,8 @@ pkg_config_path = {[str(p / 'lib/pkgconfig') for p in (self.prefix, self.sdk)]!r
         self.prepare()
         source_map = json.loads(self.args.source_map.read_text())
         for name in BUILD_ORDER:
+            if self.args.without_cairo and name in ("cairo", "pixman"):
+                continue
             source = Path(source_map[name])
             work = self.root / "sources" / name
             # Writable upstream build copies are disposable inputs, not a
@@ -284,6 +286,8 @@ pkg_config_path = {[str(p / 'lib/pkgconfig') for p in (self.prefix, self.sdk)]!r
             else:
                 getattr(self, name)(work)
         for name in ARCHIVES:
+            if self.args.without_cairo and name in ("libcairo.a", "libpixman-1.a"):
+                continue
             report = native_members(self.prefix / "lib" / name)
             print(f"{name}: {report['native_object_count']} AArch64 objects", flush=True)
 
@@ -477,6 +481,8 @@ def main():
     for name in ("cc", "cxx", "host-cc", "host-cxx", "ar", "ranlib", "strip"):
         p.add_argument("--" + name, required=True)
     p.add_argument("--jobs", type=int, default=4)
+    p.add_argument("--without-cairo", action="store_true",
+                   help="Omit Cairo and Pixman for the native Skia rendering profile")
     args = p.parse_args()
     lock = json.loads(Path(__file__).with_name("dependencies.lock.json").read_text())
     Builder(args, lock).build()

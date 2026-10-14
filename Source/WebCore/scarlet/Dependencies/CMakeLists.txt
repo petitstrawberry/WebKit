@@ -1,5 +1,6 @@
 cmake_minimum_required(VERSION 3.30)
 project(ScarletWebKitDependencies NONE)
+option(SCARLET_DEPENDENCIES_CAIRO "Build Cairo and Pixman for the software rendering profile" ON)
 include(FetchContent)
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 find_program(SCARLET_HOST_CC NAMES cc clang REQUIRED)
@@ -22,6 +23,9 @@ endfunction()
 foreach(_index RANGE 0 ${_last})
     string(JSON _item GET "${_lock}" dependencies ${_index})
     string(JSON _name GET "${_item}" name)
+    if(NOT SCARLET_DEPENDENCIES_CAIRO AND (_name STREQUAL "cairo" OR _name STREQUAL "pixman"))
+        continue()
+    endif()
     string(JSON _source GET "${_item}" source)
     string(JSON _kind GET "${_source}" kind)
     if(_kind STREQUAL "git")
@@ -64,8 +68,15 @@ set(_prefix "${CMAKE_CURRENT_BINARY_DIR}/prefix")
 set(_archives)
 foreach(_name IN ITEMS icuuc icui18n icudata z png16 freetype expat pixman-1 fontconfig
     cairo harfbuzz harfbuzz-icu xml2 sqlite3 jpeg webp webpdemux curl psl ssl crypto)
+    if(NOT SCARLET_DEPENDENCIES_CAIRO AND (_name STREQUAL "cairo" OR _name STREQUAL "pixman-1"))
+        continue()
+    endif()
     list(APPEND _archives "${_prefix}/lib/lib${_name}.a")
 endforeach()
+set(_profile_args)
+if(NOT SCARLET_DEPENDENCIES_CAIRO)
+    list(APPEND _profile_args --without-cairo)
+endif()
 add_custom_command(OUTPUT ${_archives}
     COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/build.py"
         --sdk "${SCARLET_NATIVE_RUNTIME}" --prefix "${_prefix}"
@@ -74,7 +85,7 @@ add_custom_command(OUTPUT ${_archives}
         --cc "${SCARLET_NATIVE_CC}" --cxx "${SCARLET_NATIVE_CXX}"
         --host-cc "${SCARLET_HOST_CC}" --host-cxx "${SCARLET_HOST_CXX}"
         --ar "${SCARLET_NATIVE_AR}" --ranlib "${SCARLET_NATIVE_RANLIB}"
-        --strip "${SCARLET_NATIVE_STRIP}" --jobs 4
+        --strip "${SCARLET_NATIVE_STRIP}" --jobs 4 ${_profile_args}
     DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/build.py"
             "${CMAKE_CURRENT_SOURCE_DIR}/dependencies.lock.json"
     USES_TERMINAL VERBATIM)
