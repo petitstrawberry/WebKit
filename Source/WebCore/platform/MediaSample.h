@@ -45,6 +45,7 @@ typedef const struct opaqueCMFormatDescription *CMFormatDescriptionRef;
 namespace WebCore {
 
 class MockSampleBox;
+class MediaSampleScarlet;
 class ProcessIdentity;
 
 using TrackID = uint64_t;
@@ -52,6 +53,9 @@ using TrackID = uint64_t;
 class PlatformSample {
 public:
     using VariantType = Variant<const MockSampleBox*
+#if USE(SCARLET_MEDIA)
+        , const MediaSampleScarlet*
+#endif
 #if PLATFORM(COCOA)
         , RetainPtr<CMSampleBufferRef>
 #elif USE(GSTREAMER)
@@ -129,6 +133,9 @@ public:
         MockSampleBox,
         CMSampleBuffer,
         GStreamerSample,
+#if USE(SCARLET_MEDIA)
+        Scarlet,
+#endif
     };
     virtual Type type() const = 0;
 

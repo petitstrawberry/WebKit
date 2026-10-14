@@ -42,6 +42,9 @@
 #include "Logging.h"
 #include "MIMETypeRegistry.h"
 #include "MediaPlayerPrivate.h"
+#if USE(SCARLET_MEDIA)
+#include "MediaPlayerPrivateScarlet.h"
+#endif
 #include "MediaResourceSniffer.h"
 #include "MediaStrategy.h"
 #include "MessageClientForTesting.h"
@@ -363,6 +366,10 @@ static void buildMediaEnginesVector() WTF_REQUIRES_LOCK(mediaEngineVectorLock)
     MediaPlayerPrivateWirelessPlayback::registerMediaEngine(addMediaEngine);
 #endif
 
+
+#if USE(SCARLET_MEDIA)
+    MediaPlayerPrivateScarlet::registerMediaEngine(addMediaEngine);
+#endif
     haveMediaEnginesVector() = true;
 }
 

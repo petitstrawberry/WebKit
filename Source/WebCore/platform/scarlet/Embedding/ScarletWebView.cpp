@@ -474,7 +474,7 @@ extern "C" int32_t scarlet_webview_create(const SWVConfiguration* configuration,
     settings.setCookieEnabled(true);
     settings.setAcceleratedCompositingEnabled(false);
 #if ENABLE(VIDEO)
-    settings.setMediaEnabled(false);
+    settings.setMediaEnabled(USE(SCARLET_MEDIA));
 #endif
     settings.setStandardFontFamily("serif"_s);
     settings.setSerifFontFamily("serif"_s);

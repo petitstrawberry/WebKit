@@ -89,3 +89,19 @@ if (SCARLET_NATIVE_MEMORY_LIBRARY OR NOT SCARLET_BUILD_EMBEDDING)
     endif ()
     list(APPEND WebCore_LIBRARIES Scarlet::NativeMemory)
 endif ()
+
+if (SCARLET_USE_NATIVE_MEDIA)
+    list(APPEND WebCore_SOURCES platform/graphics/scarlet/MediaPlayerPrivateScarlet.cpp)
+    list(APPEND WebCore_PRIVATE_FRAMEWORK_HEADERS
+        platform/graphics/scarlet/ScarletMedia.h
+        platform/graphics/scarlet/MediaSampleScarlet.h
+        platform/graphics/scarlet/MediaPlayerPrivateScarlet.h)
+    if (ENABLE_MEDIA_SOURCE)
+        list(APPEND WebCore_SOURCES
+            platform/graphics/scarlet/MediaSourcePrivateScarlet.cpp
+            platform/graphics/scarlet/SourceBufferPrivateScarlet.cpp)
+        list(APPEND WebCore_PRIVATE_FRAMEWORK_HEADERS
+            platform/graphics/scarlet/MediaSourcePrivateScarlet.h
+            platform/graphics/scarlet/SourceBufferPrivateScarlet.h)
+    endif ()
+endif ()

@@ -163,6 +163,7 @@ struct SeekTarget {
 };
 
 enum class MediaPlatformType {
+    Scarlet,
     Mock,
     AVFObjC,
     GStreamer,
@@ -170,6 +171,7 @@ enum class MediaPlatformType {
 };
 
 enum class MediaPlayerType {
+    Scarlet,
     Null,
     Mock,
     MockMSE,
