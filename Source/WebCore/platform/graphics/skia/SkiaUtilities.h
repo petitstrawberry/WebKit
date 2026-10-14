@@ -27,6 +27,7 @@
 
 #if USE(SKIA)
 
+#include "SkiaGpuFence.h"
 #include <memory>
 #include <optional>
 
@@ -50,7 +51,7 @@ enum GrSurfaceOrigin : int;
 namespace WebCore {
 
 class BitmapTexture;
-class GLFence;
+
 enum class BlendMode : uint8_t;
 enum class CompositeOperator : uint8_t;
 
@@ -84,11 +85,14 @@ inline SkSamplingOptions samplingOptionsForImageDraw(const SkMatrix& deviceMatri
     return samplingOptionsForMatrix(matrix);
 }
 
+#if !PLATFORM(SCARLET)
 // Creates a GrBackendTexture from a BitmapTexture's GL texture.
 GrBackendTexture createBackendTexture(const BitmapTexture&);
 
 // Creates a Skia surface wrapping a BitmapTexture's GL texture.
 sk_sp<SkSurface> createSurface(GrDirectContext*, const BitmapTexture&, const SkSurfaceProps&, GrSurfaceOrigin = kTopLeft_GrSurfaceOrigin, unsigned sampleCount = 0);
+
+#endif
 
 // Rewraps a GPU-backed SkImage for use in a different GrDirectContext.
 // Extracts the backend texture from the source image and creates a new
@@ -96,23 +100,26 @@ sk_sp<SkSurface> createSurface(GrDirectContext*, const BitmapTexture&, const SkS
 // original image's color type, alpha type, and color space.
 sk_sp<SkImage> rewrapImageForContext(GrDirectContext*, const SkImage&);
 
+#if !PLATFORM(SCARLET)
 // Extracts the GL texture ID from a GPU-backed SkImage, if available.
 std::optional<unsigned> retrieveGLTextureID(const SkImage&);
+
+#endif
 
 // Flushes the surface, submits pending GPU commands, and creates a GLFence
 // for async synchronization. Falls back to synchronous submit if fences
 // are not supported or creation fails, and returns nullptr.
-std::unique_ptr<GLFence> flushAndSubmitSurfaceWithFence(GrDirectContext*, SkSurface*);
+std::unique_ptr<SkiaGpuFence> flushAndSubmitSurfaceWithFence(GrDirectContext*, SkSurface*);
 
 // Flushes the image, submits pending GPU commands, and creates a GLFence
 // for async synchronization. Falls back to synchronous submit if fences
 // are not supported or creation fails, and returns nullptr.
-std::unique_ptr<GLFence> flushAndSubmitImageWithFence(GrDirectContext*, const sk_sp<SkImage>&);
+std::unique_ptr<SkiaGpuFence> flushAndSubmitImageWithFence(GrDirectContext*, const sk_sp<SkImage>&);
 
 // Flushes and submits pending GPU commands and creates a GLFence for async
 // synchronization. Falls back to synchronous submit if fences are not
 // supported or creation fails, and returns nullptr.
-std::unique_ptr<GLFence> flushAndSubmitWithFence(GrDirectContext*);
+std::unique_ptr<SkiaGpuFence> flushAndSubmitWithFence(GrDirectContext*);
 
 SkBlendMode toSkiaBlendMode(BlendMode, std::optional<CompositeOperator> = std::nullopt);
 

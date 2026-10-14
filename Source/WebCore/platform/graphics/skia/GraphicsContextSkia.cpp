@@ -32,7 +32,9 @@
 #include "FloatRect.h"
 #include "FloatRoundedRect.h"
 #include "FontRenderOptions.h"
+#if !PLATFORM(SCARLET)
 #include "GLContext.h"
+#endif
 #include "ImageBuffer.h"
 #include "IntRect.h"
 #include "NativeImage.h"
@@ -69,6 +71,15 @@ WTF_IGNORE_WARNINGS_IN_THIRD_PARTY_CODE_END
 #endif
 
 namespace WebCore {
+static bool prepareSkiaContext()
+{
+#if PLATFORM(SCARLET)
+    return PlatformDisplay::sharedDisplay().prepareSkiaContext();
+#else
+    auto* context = PlatformDisplay::sharedDisplay().skiaGLContext();
+    return context && context->makeContextCurrent();
+#endif
+}
 
 static sk_sp<SkColorSpace> skColorSpaceForColorSpace(ColorSpaceName colorSpace)
 {
@@ -158,7 +169,7 @@ bool GraphicsContextSkia::makeGLContextCurrentIfNeeded() const
     if (m_renderingPurpose != RenderingPurpose::Canvas && m_renderingPurpose != RenderingPurpose::DOM)
         return true;
 
-    return PlatformDisplay::sharedDisplay().skiaGLContext()->makeContextCurrent();
+    return prepareSkiaContext();
 }
 
 void GraphicsContextSkia::pushSkiaState()
@@ -248,8 +259,7 @@ sk_sp<SkImage> GraphicsContextSkia::imageForCurrentThread(const sk_sp<SkImage>& 
     if (!image->isTextureBacked())
         return image;
 
-    auto* glContext = PlatformDisplay::sharedDisplay().skiaGLContext();
-    if (!glContext || !glContext->makeContextCurrent())
+    if (!prepareSkiaContext())
         return image;
 
     // Use the destination context (current thread's context), not nativeImage.grContext()
@@ -1116,8 +1126,7 @@ void GraphicsContextSkia::fillRectWithRoundedHole(const FloatRect& outerRect, co
 // FIXME: Make this a GraphicsContextSkia static function, and use it throughout WebCore.
 static sk_sp<SkSurface> createAcceleratedSurface(const IntSize& size)
 {
-    auto* glContext = PlatformDisplay::sharedDisplay().skiaGLContext();
-    if (!glContext || !glContext->makeContextCurrent())
+    if (!prepareSkiaContext())
         return nullptr;
 
     auto* grContext = PlatformDisplay::sharedDisplay().skiaGrContext();

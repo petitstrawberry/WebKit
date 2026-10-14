@@ -26,7 +26,7 @@
 #pragma once
 
 #if USE(SKIA)
-#include "GLFence.h"
+#include "SkiaGpuFence.h"
 #include "IntRect.h"
 #include "RenderingMode.h"
 #include "SkiaGPUAtlas.h"
@@ -44,7 +44,7 @@ WTF_IGNORE_WARNINGS_IN_THIRD_PARTY_CODE_END
 namespace WebCore {
 
 #if USE(TEXTURE_MAPPER)
-using SkiaImageToFenceMap = HashMap<const SkImage*, std::unique_ptr<GLFence>>;
+using SkiaImageToFenceMap = HashMap<const SkImage*, std::unique_ptr<SkiaGpuFence>>;
 #endif
 
 struct SkiaRecordingData {

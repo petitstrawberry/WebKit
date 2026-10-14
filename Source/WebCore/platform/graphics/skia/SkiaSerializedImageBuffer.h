@@ -29,8 +29,8 @@
 #include "ImageBuffer.h"
 #include <wtf/TZoneMalloc.h>
 
+#include "SkiaGpuFence.h"
 namespace WebCore {
-class GLFence;
 class ImageBuffer;
 class Nativeimage;
 
@@ -50,7 +50,7 @@ private:
     ColorSpace m_colorSpace { ColorSpace::SRGB() };
     ImageBufferFormat m_bufferFormat;
     RefPtr<NativeImage> m_image;
-    std::unique_ptr<GLFence> m_fence;
+    std::unique_ptr<SkiaGpuFence> m_fence;
     size_t m_memoryCost { 0 };
 };
 

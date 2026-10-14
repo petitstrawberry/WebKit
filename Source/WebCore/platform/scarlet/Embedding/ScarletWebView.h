@@ -108,6 +108,14 @@ int32_t scarlet_webview_tick(ScarletWebView*); /* Nonblocking native RunLoop cyc
  * damage once, when the host is ready to consume a frame. */
 int32_t scarlet_webview_needs_paint(ScarletWebView*, uint32_t*);
 int32_t scarlet_webview_pixels(ScarletWebView*, SWVPixels*);
+/* Owned native BGRA8 capability, no CPU framebuffer/readback. At most two
+ * leases are live. Release on the owner when its consumer stops sampling,
+ * or immediately when discarding a never-presented frame. Tokens remain
+ * valid across navigation and viewport changes. */
+typedef struct { int32_t handle; uint32_t width, height, format; uint64_t generation; } SWVGpuFrame;
+int32_t scarlet_webview_gpu_frame_capacity(ScarletWebView*, uint32_t*);
+int32_t scarlet_webview_gpu_frame(ScarletWebView*, SWVGpuFrame*);
+int32_t scarlet_webview_release_gpu_frame(ScarletWebView*, uint64_t generation);
 int32_t scarlet_webview_state(ScarletWebView*, SWVState*);
 int32_t scarlet_webview_mouse(ScarletWebView*, const SWVMouseEvent*, uint32_t* handled);
 int32_t scarlet_webview_wheel(ScarletWebView*, const SWVWheelEvent*, uint32_t* handled);

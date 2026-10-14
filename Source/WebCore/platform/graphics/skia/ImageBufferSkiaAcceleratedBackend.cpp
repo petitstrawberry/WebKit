@@ -28,8 +28,10 @@
 
 #if USE(SKIA)
 #include "FontRenderOptions.h"
+#if !PLATFORM(SCARLET)
 #include "GLContext.h"
-#include "GLFence.h"
+#endif
+#include "SkiaGpuFence.h"
 #include "GraphicsContextSkia.h"
 #include "IntRect.h"
 #include "NativeImage.h"
@@ -57,6 +59,15 @@ WTF_IGNORE_WARNINGS_IN_THIRD_PARTY_CODE_END
 #endif
 
 namespace WebCore {
+static bool prepareSkiaContext()
+{
+#if PLATFORM(SCARLET)
+    return PlatformDisplay::sharedDisplay().prepareSkiaContext();
+#else
+    auto* context = PlatformDisplay::sharedDisplay().skiaGLContext();
+    return context && context->makeContextCurrent();
+#endif
+}
 
 // A canvas proxy that delegates all drawing operations to a single target canvas,
 // which can be dynamically switched. This allows GraphicsContextSkia to hold a
@@ -113,8 +124,7 @@ std::unique_ptr<ImageBufferSkiaAcceleratedBackend> ImageBufferSkiaAcceleratedBac
         return nullptr;
 #endif
 
-    auto* glContext = PlatformDisplay::sharedDisplay().skiaGLContext();
-    if (!glContext || !glContext->makeContextCurrent())
+    if (!prepareSkiaContext())
         return nullptr;
 
     auto* grContext = PlatformDisplay::sharedDisplay().skiaGrContext();
@@ -202,7 +212,7 @@ void ImageBufferSkiaAcceleratedBackend::replayCanvasRecordingContextIfNeeded()
     if (!grContext)
         return;
 
-    if (!PlatformDisplay::sharedDisplay().skiaGLContext()->makeContextCurrent())
+    if (!prepareSkiaContext())
         return;
 
     ASSERT(grContext == PlatformDisplay::sharedDisplay().skiaGrContext());
@@ -242,7 +252,7 @@ void ImageBufferSkiaAcceleratedBackend::flushContext()
     if (!grContext)
         return;
 
-    if (!PlatformDisplay::sharedDisplay().skiaGLContext()->makeContextCurrent())
+    if (!prepareSkiaContext())
         return;
 
     ASSERT(grContext == PlatformDisplay::sharedDisplay().skiaGrContext());
@@ -263,7 +273,7 @@ void ImageBufferSkiaAcceleratedBackend::prepareForDisplay()
     if (!grContext)
         return;
 
-    if (!PlatformDisplay::sharedDisplay().skiaGLContext()->makeContextCurrent())
+    if (!prepareSkiaContext())
         return;
 
     ASSERT(grContext == PlatformDisplay::sharedDisplay().skiaGrContext());
@@ -310,7 +320,7 @@ RefPtr<NativeImage> ImageBufferSkiaAcceleratedBackend::createNativeImageReferenc
     // because that call doesn't force the MSAA resolution, which can produce outdated results
     // in the resulting SkImage.
     auto& display = PlatformDisplay::sharedDisplay();
-    if (grContext && display.msaaSampleCount() > 0 && display.skiaGLContext()->makeContextCurrent()) {
+    if (grContext && display.msaaSampleCount() > 0 && prepareSkiaContext()) {
         ASSERT(grContext == display.skiaGrContext());
         grContext->flush(m_surface.get());
     }
@@ -320,7 +330,7 @@ RefPtr<NativeImage> ImageBufferSkiaAcceleratedBackend::createNativeImageReferenc
 
 void ImageBufferSkiaAcceleratedBackend::getPixelBuffer(const IntRect& srcRect, PixelBuffer& destination)
 {
-    if (!PlatformDisplay::sharedDisplay().skiaGLContext()->makeContextCurrent())
+    if (!prepareSkiaContext())
         return;
 
     // CPU needs to read pixels now, replay the recording.
@@ -331,7 +341,7 @@ void ImageBufferSkiaAcceleratedBackend::getPixelBuffer(const IntRect& srcRect, P
 
 void ImageBufferSkiaAcceleratedBackend::putPixelBuffer(const PixelBufferSourceView& pixelBuffer, const IntRect& srcRect, const IntPoint& destPoint, AlphaPremultiplication destFormat)
 {
-    if (!PlatformDisplay::sharedDisplay().skiaGLContext()->makeContextCurrent())
+    if (!prepareSkiaContext())
         return;
 
     // CPU needs to write pixels now, replay the recording.

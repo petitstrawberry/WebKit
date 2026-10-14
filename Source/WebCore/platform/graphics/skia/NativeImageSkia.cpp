@@ -27,7 +27,9 @@
 #include "NativeImage.h"
 
 #if USE(SKIA)
+#if !PLATFORM(SCARLET)
 #include "GLContext.h"
+#endif
 #include "GraphicsContextSkia.h"
 #include "PixelBuffer.h"
 #include "PlatformDisplay.h"
@@ -38,6 +40,15 @@ WTF_IGNORE_WARNINGS_IN_THIRD_PARTY_CODE_BEGIN // GLib/Win ports
 WTF_IGNORE_WARNINGS_IN_THIRD_PARTY_CODE_END
 
 namespace WebCore {
+static bool prepareSkiaContext()
+{
+#if PLATFORM(SCARLET)
+    return PlatformDisplay::sharedDisplay().prepareSkiaContext();
+#else
+    auto* context = PlatformDisplay::sharedDisplay().skiaGLContext();
+    return context && context->makeContextCurrent();
+#endif
+}
 
 RefPtr<NativeImage> NativeImage::create(PlatformImagePtr&& platformImage, std::optional<GainMap>&& gainMap, GrDirectContext* grContext)
 {
@@ -175,7 +186,7 @@ NativeImage::UnpremultipliedPixels NativeImage::unpremultipliedPixels() const
     if (!sizeInBytes || SkImageInfo::ByteSizeOverflowed(sizeInBytes))
         return { };
 
-    if (platformImage->isTextureBacked() && !PlatformDisplay::sharedDisplay().skiaGLContext()->makeContextCurrent())
+    if (platformImage->isTextureBacked() && !prepareSkiaContext())
         return { };
 
     Vector<uint8_t> pixels(sizeInBytes);
@@ -193,7 +204,7 @@ std::optional<Color> NativeImage::singlePixelSolidColor() const
 
     auto platformImage = this->platformImage();
     if (platformImage->isTextureBacked()) {
-        if (!PlatformDisplay::sharedDisplay().skiaGLContext()->makeContextCurrent())
+        if (!prepareSkiaContext())
             return std::nullopt;
 
         ASSERT(m_grContext);

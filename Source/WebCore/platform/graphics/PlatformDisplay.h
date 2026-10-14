@@ -25,6 +25,27 @@
 
 #pragma once
 
+#if PLATFORM(SCARLET) && USE(SKIA)
+#include "ScarletSkiaVulkan.h"
+#include <wtf/MemoryPressureHandler.h>
+namespace WebCore {
+class PlatformDisplay final {
+public:
+    static PlatformDisplay& sharedDisplay();
+    static PlatformDisplay* sharedDisplayIfExists();
+    static void destroySharedDisplay();
+    GrDirectContext* skiaGrContext() const;
+    std::shared_ptr<ScarletSkiaVulkan> skiaVulkanContext() const { return m_context; }
+    bool prepareSkiaContext() const;
+    unsigned msaaSampleCount() const { return 0; }
+    size_t maxSkiaResourceCacheBytes() const;
+    void skiaReleaseUnusedResources(WTF::Critical);
+private:
+    PlatformDisplay();
+    std::shared_ptr<ScarletSkiaVulkan> m_context;
+};
+}
+#else
 #include "GLDisplay.h"
 #include <wtf/Noncopyable.h>
 #include <wtf/TZoneMalloc.h>
@@ -164,3 +185,5 @@ private:
 SPECIALIZE_TYPE_TRAITS_BEGIN(WebCore::ToClassName) \
     static bool isType(const WebCore::PlatformDisplay& display) { return display.type() == WebCore::PlatformDisplay::Type::DisplayType; } \
 SPECIALIZE_TYPE_TRAITS_END()
+
+#endif

@@ -27,14 +27,26 @@
 #include "SkiaSerializedImageBuffer.h"
 
 #if USE(SKIA)
+#if !PLATFORM(SCARLET)
 #include "GLContext.h"
-#include "GLFence.h"
+#endif
+#include "SkiaGpuFence.h"
 #include "GraphicsContext.h"
+#include "SkiaUtilities.h"
 #include "NativeImage.h"
 #include "PlatformDisplay.h"
 #include <wtf/TZoneMallocInlines.h>
 
 namespace WebCore {
+static bool prepareSkiaContext()
+{
+#if PLATFORM(SCARLET)
+    return PlatformDisplay::sharedDisplay().prepareSkiaContext();
+#else
+    auto* context = PlatformDisplay::sharedDisplay().skiaGLContext();
+    return context && context->makeContextCurrent();
+#endif
+}
 
 WTF_MAKE_TZONE_ALLOCATED_IMPL(SkiaSerializedImageBuffer);
 
@@ -56,7 +68,11 @@ SkiaSerializedImageBuffer::SkiaSerializedImageBuffer(ImageBuffer& imageBuffer)
     m_resolutionScale = imageBuffer.resolutionScale();
     m_colorSpace = imageBuffer.colorSpace();
     m_bufferFormat = { imageBuffer.pixelFormat() };
+    #if PLATFORM(SCARLET)
+    m_fence = SkiaUtilities::flushAndSubmitImageWithFence(PlatformDisplay::sharedDisplay().skiaGrContext(), m_image->platformImage());
+#else
     m_fence = GLFence::create(PlatformDisplay::sharedDisplay().glDisplay());
+#endif
 }
 
 SkiaSerializedImageBuffer::~SkiaSerializedImageBuffer() = default;
@@ -68,7 +84,7 @@ RefPtr<ImageBuffer> SkiaSerializedImageBuffer::sinkIntoImageBuffer()
 
     ASSERT(m_image);
 
-    if (!PlatformDisplay::sharedDisplay().skiaGLContext()->makeContextCurrent())
+    if (!prepareSkiaContext())
         return nullptr;
 
     auto copiedImageBuffer = ImageBuffer::create(m_logicalSize, RenderingMode::Accelerated, RenderingPurpose::Unspecified, m_resolutionScale, m_colorSpace, m_bufferFormat);

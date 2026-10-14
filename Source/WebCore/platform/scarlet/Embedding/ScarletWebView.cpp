@@ -23,7 +23,14 @@
 #include "FocusController.h"
 #include "FrameLoadRequest.h"
 #include "FrameLoader.h"
+#if USE(SKIA)
+#include "GraphicsContextSkia.h"
+#include "PlatformDisplay.h"
+#include "ScarletSkiaVulkan.h"
+#include <skia/core/SkCanvas.h>
+#else
 #include "GraphicsContextCairo.h"
+#endif
 #include "HandleUserInputEventResult.h"
 #include "HitTestRequest.h"
 #include "LocalFrame.h"
@@ -36,7 +43,9 @@
 #include "PlatformWheelEvent.h"
 #include "PointerCaptureController.h"
 #include "ProcessWarming.h"
+#if USE(CAIRO)
 #include "RefPtrCairo.h"
+#endif
 #include "ResourceRequest.h"
 #include "SandboxFlags.h"
 #include "ScarletPlatform.h"
@@ -52,7 +61,10 @@
 #include <wtf/RunLoop.h>
 #include <wtf/URL.h>
 #include <wtf/text/CString.h>
+#if USE(CAIRO)
 #include <cairo.h>
+#endif
+#include <array>
 #include <fontconfig/fontconfig.h>
 #include <atomic>
 #include <cmath>
@@ -66,8 +78,8 @@
 #include <unordered_set>
 #include <vector>
 
-#if !PLATFORM(SCARLET) || !OS(SCARLET) || !USE(CAIRO) || !ENABLE(C_LOOP) || ENABLE(JIT)
-#error "ScarletWebView requires native Scarlet Cairo and the C-loop JavaScript interpreter"
+#if !PLATFORM(SCARLET) || !OS(SCARLET) || (!USE(CAIRO) && !USE(SKIA)) || !ENABLE(C_LOOP) || ENABLE(JIT)
+#error "ScarletWebView requires native Scarlet graphics and the C-loop JavaScript interpreter"
 #endif
 extern "C" uint64_t scarlet_jsc_execution_entry_count();
 
@@ -78,7 +90,17 @@ struct ScarletWebView {
     ScarletFrameLoadState loadState;
     RefPtr<Page> page;
     RefPtr<LocalFrame> frame;
+#if USE(SKIA)
+    struct GpuSlot {
+        std::unique_ptr<ScarletSkiaVulkan::Surface> surface;
+        uint64_t lease { 0 };
+        uint32_t width { 0 }, height { 0 };
+    };
+    std::array<GpuSlot, 2> gpuSlots;
+    ScarletSkiaVulkan::Surface* surface { nullptr };
+#else
     RefPtr<cairo_surface_t> surface;
+#endif
     uint32_t width { 0 };
     uint32_t height { 0 };
     double scale { 1 };
@@ -180,13 +202,28 @@ int32_t paint(ScarletWebView& view)
 
     auto size = cssSize(view);
     IntRect damage { IntPoint { }, size };
-    if (view.surface && !view.loadState.fullPaint && !view.loadState.dirtyRect.isEmpty())
+    if (!USE(SKIA) && view.surface && !view.loadState.fullPaint && !view.loadState.dirtyRect.isEmpty())
         damage.intersect(view.loadState.dirtyRect);
     view.loadState.needsPaint = false;
     view.loadState.fullPaint = false;
     view.loadState.dirtyRect = { };
     if (damage.isEmpty())
         return SWV_OK;
+#if USE(SKIA)
+    if (!view.surface) return SWV_FAILED;
+    {
+        GraphicsContextSkia context(*view.surface->skSurface().getCanvas(), RenderingMode::Accelerated, RenderingPurpose::DOM);
+        context.scale(FloatSize { static_cast<float>(view.scale), static_cast<float>(view.scale) });
+        context.clip(FloatRect { damage });
+        context.fillRect(FloatRect { damage }, Color::white);
+        frameView->paint(context, damage);
+    }
+    auto device = PlatformDisplay::sharedDisplay().skiaVulkanContext();
+    if (!device || !device->submit(*view.surface)) {
+        view.loadState.error = "WebCore Vulkan page submission failed."_s;
+        return SWV_FAILED;
+    }
+#else
     auto surface = view.surface;
     if (!surface)
         surface = adoptRef(cairo_image_surface_create(CAIRO_FORMAT_ARGB32, view.width, view.height));
@@ -217,12 +254,16 @@ int32_t paint(ScarletWebView& view)
     bool changed = view.publishedPixels.size() != length;
     if (changed)
         view.publishedPixels.resize(length);
+#endif
     FloatRect scaledDamage { damage };
     scaledDamage.scale(view.scale);
     auto deviceDamage = enclosingIntRect(scaledDamage);
     deviceDamage.intersect(IntRect { 0, 0, static_cast<int>(view.width), static_cast<int>(view.height) });
     ++view.paintStatistics.paints;
     view.paintStatistics.painted_pixels += static_cast<uint64_t>(deviceDamage.width()) * deviceDamage.height();
+#if USE(SKIA)
+    ++view.generation;
+#else
     size_t rowLength = static_cast<size_t>(deviceDamage.width()) * 4;
     for (int row = deviceDamage.y(); row < deviceDamage.maxY(); ++row) {
         size_t offset = static_cast<size_t>(row) * stride + static_cast<size_t>(deviceDamage.x()) * 4;
@@ -233,6 +274,7 @@ int32_t paint(ScarletWebView& view)
     }
     if (changed)
         ++view.generation;
+#endif
     return SWV_OK;
 }
 } // namespace
@@ -301,6 +343,9 @@ extern "C" int32_t scarlet_webview_shutdown()
     auto& threadData = threadGlobalDataSingleton();
     threadData.destroy();
     threadData.threadTimers().setSharedTimer(nullptr);
+#if USE(SKIA)
+    PlatformDisplay::destroySharedDisplay();
+#endif
     shutDown = true;
     return SWV_OK;
 }
@@ -569,6 +614,9 @@ extern "C" int32_t scarlet_webview_pixels(ScarletWebView* view, SWVPixels* out)
     if (!out)
         return SWV_INVALID_ARGUMENT;
     *out = { };
+#if USE(SKIA)
+    return SWV_UNSUPPORTED;
+#else
     status = paint(*view);
     if (status != SWV_OK)
         return status;
@@ -580,6 +628,70 @@ extern "C" int32_t scarlet_webview_pixels(ScarletWebView* view, SWVPixels* out)
         return SWV_FAILED;
     *out = { data, static_cast<size_t>(stride) * view->height, view->width, view->height, static_cast<uint32_t>(stride), 1, view->generation };
     return SWV_OK;
+#endif
+}
+
+extern "C" int32_t scarlet_webview_gpu_frame_capacity(ScarletWebView* view, uint32_t* out)
+{
+    auto status = viewStatus(view);
+    if (status != SWV_OK) return status;
+    if (!out) return SWV_INVALID_ARGUMENT;
+#if USE(SKIA)
+    *out = 0;
+    for (const auto& slot : view->gpuSlots) if (!slot.lease) ++*out;
+    return SWV_OK;
+#else
+    return SWV_UNSUPPORTED;
+#endif
+}
+extern "C" int32_t scarlet_webview_gpu_frame(ScarletWebView* view, SWVGpuFrame* out)
+{
+    auto status = viewStatus(view);
+    if (status != SWV_OK) return status;
+    if (!out) return SWV_INVALID_ARGUMENT;
+    *out = { -1, 0, 0, 0, 0 };
+#if USE(SKIA)
+    RefPtr frameView = view->frame->view();
+    if (view->surface && !view->loadState.needsPaint && frameView && !frameView->needsLayout()) return SWV_EMPTY;
+    auto device = PlatformDisplay::sharedDisplay().skiaVulkanContext();
+    if (!device) { view->loadState.error = "Native Vulkan context creation failed."_s; return SWV_FAILED; }
+    for (auto& slot : view->gpuSlots) {
+        if (slot.lease) continue;
+        if (!slot.surface || slot.width != view->width || slot.height != view->height) {
+            slot.surface = nullptr;
+            slot.surface = device->createSurface(view->width, view->height);
+            if (!slot.surface) { view->loadState.error = "Native shared page image allocation failed."_s; return SWV_FAILED; }
+            slot.width = view->width; slot.height = view->height;
+        }
+        view->surface = slot.surface.get();
+        status = paint(*view);
+        if (status != SWV_OK) return status;
+        auto handle = slot.surface->duplicateHandle();
+        if (handle < 0) return SWV_FAILED;
+        slot.lease = view->generation;
+        *out = { handle, slot.width, slot.height, 1, slot.lease };
+        return SWV_OK;
+    }
+    return SWV_EMPTY;
+#else
+    return SWV_UNSUPPORTED;
+#endif
+}
+extern "C" int32_t scarlet_webview_release_gpu_frame(ScarletWebView* view, uint64_t generation)
+{
+    auto status = viewStatus(view);
+    if (status != SWV_OK) return status;
+#if USE(SKIA)
+    if (!generation) return SWV_INVALID_ARGUMENT;
+    for (auto& slot : view->gpuSlots) {
+        if (slot.lease != generation) continue;
+        slot.lease = 0;
+        return SWV_OK;
+    }
+    return SWV_STALE_REQUEST;
+#else
+    return SWV_UNSUPPORTED;
+#endif
 }
 
 extern "C" int32_t scarlet_webview_state(ScarletWebView* view, SWVState* out)

@@ -1,5 +1,19 @@
-include(platform/Cairo.cmake)
-include(platform/FreeType.cmake)
+if (USE_SKIA)
+    include(platform/Skia.cmake)
+    list(REMOVE_ITEM WebCore_UNIFIED_SOURCE_LIST_FILES "platform/SourcesSkia.txt")
+    list(APPEND WebCore_UNIFIED_SOURCE_LIST_FILES "platform/scarlet/SourcesSkiaScarlet.txt")
+    list(APPEND WebCore_PRIVATE_INCLUDE_DIRECTORIES
+        ${WEBCORE_DIR}/platform/graphics/scarlet/vulkan
+        ${WEBCORE_DIR}/platform/graphics/freetype)
+    list(APPEND WebCore_SOURCES
+        platform/graphics/scarlet/vulkan/PlatformDisplayScarletSkia.cpp
+        platform/graphics/scarlet/vulkan/SkiaUtilitiesScarlet.cpp
+        platform/graphics/freetype/RefPtrFontconfig.cpp)
+    list(APPEND WebCore_LIBRARIES Fontconfig::Fontconfig Freetype::Freetype ScarletSkiaVulkan)
+else ()
+    include(platform/Cairo.cmake)
+    include(platform/FreeType.cmake)
+endif ()
 include(platform/ImageDecoders.cmake)
 include(platform/OpenSSL.cmake)
 include(platform/Curl.cmake)
