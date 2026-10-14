@@ -217,10 +217,12 @@ int32_t paint(ScarletWebView& view)
     if (!view.surface) return SWV_FAILED;
     {
         GraphicsContextSkia context(*view.surface->skSurface().getCanvas(), RenderingMode::Accelerated, RenderingPurpose::DOM);
+        context.save();
         context.scale(FloatSize { static_cast<float>(view.scale), static_cast<float>(view.scale) });
         context.clip(FloatRect { damage });
         context.fillRect(FloatRect { damage }, Color::white);
         frameView->paint(context, damage);
+        context.restore();
     }
     auto device = PlatformDisplay::sharedDisplay().skiaVulkanContext();
     if (!device || !device->submit(*view.surface)) {
