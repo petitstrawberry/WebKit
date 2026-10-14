@@ -36,6 +36,9 @@
 
 #include <memory>
 
+static_assert(skgpu::tess::kCubicCurveType == static_cast<int>(skgpu::tess::kCubicCurveType));
+static_assert(skgpu::tess::kConicCurveType == static_cast<int>(skgpu::tess::kConicCurveType));
+
 class GrGLSLVaryingHandler;
 
 namespace skgpu {
@@ -108,12 +111,12 @@ std::unique_ptr<GrGeometryProcessor::ProgramImpl> HullShader::makeProgramImpl(
                 );
             } else {
                 v->insertFunction(SkStringPrintf(
-                "bool is_conic_curve() { return curveType != %g; }",
-                        tess::kCubicCurveType).c_str());
+                "bool is_conic_curve() { return curveType != %d; }",
+                        static_cast<int>(tess::kCubicCurveType)).c_str());
                 v->insertFunction(SkStringPrintf(
                 "bool is_non_triangular_conic_curve() {"
-                    "return curveType == %g;"
-                "}", tess::kConicCurveType).c_str());
+                    "return curveType == %d;"
+                "}", static_cast<int>(tess::kConicCurveType)).c_str());
             }
             v->codeAppend(
             "float2 p0=p01.xy, p1=p01.zw, p2=p23.xy, p3=p23.zw;"

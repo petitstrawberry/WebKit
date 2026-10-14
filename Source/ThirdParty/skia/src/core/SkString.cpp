@@ -16,6 +16,7 @@
 #include "src/core/SkUTF.h"
 #include "src/core/SkUtils.h"
 
+#include <charconv>
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
@@ -179,10 +180,19 @@ char* SkStrAppendScalar(char string[], SkScalar value) {
     }
 
     // since floats have at most 8 significant digits, we limit our %g to that.
+#if !defined(__scarlet__)
     static const char gFormat[] = "%.8g";
+#endif
     // make it 1 larger for the terminating 0
     char buffer[kSkStrAppendScalar_MaxSize + 1];
+#if defined(__scarlet__)
+    auto result = std::to_chars(buffer, buffer + sizeof(buffer) - 1, value,
+                                std::chars_format::general, 8);
+    if (result.ec != std::errc{}) SkUNREACHABLE;
+    int len = static_cast<int>(result.ptr - buffer);
+#else
     int len = snprintf(buffer, sizeof(buffer), gFormat, value);
+#endif
     memcpy(string, buffer, len);
     SkASSERT(len <= kSkStrAppendScalar_MaxSize);
     return string + len;

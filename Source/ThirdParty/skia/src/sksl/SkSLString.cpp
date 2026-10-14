@@ -132,7 +132,13 @@ void SkSL::String::vappendf(std::string *str, const char* fmt, va_list args) {
     char buffer[BUFFER_SIZE];
     va_list reuse;
     va_copy(reuse, args);
-    size_t size = vsnprintf(buffer, BUFFER_SIZE, fmt, args);
+    int count = vsnprintf(buffer, BUFFER_SIZE, fmt, args);
+    if (count < 0) {
+        SkDebugf("SkSL::String: vsnprintf reported error.\n");
+        va_end(reuse);
+        return;
+    }
+    size_t size = static_cast<size_t>(count);
     if (BUFFER_SIZE >= size + 1) {
         str->append(buffer, size);
     } else {

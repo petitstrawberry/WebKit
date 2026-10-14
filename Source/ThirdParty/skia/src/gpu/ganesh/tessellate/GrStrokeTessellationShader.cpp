@@ -28,6 +28,8 @@
 #include <cmath>
 #include <cstdint>
 
+static_assert(skgpu::tess::kCubicCurveType == static_cast<int>(skgpu::tess::kCubicCurveType));
+
 namespace {
 
 // float2 robust_normalize_diff(float2 a, float b) { ... }
@@ -271,8 +273,8 @@ void GrStrokeTessellationShader::Impl::onEmitCode(EmitArgs& args, GrGPArgs* gpAr
 
     if (shader.hasExplicitCurveType()) {
         args.fVertBuilder->insertFunction(SkStringPrintf(
-        "bool is_conic_curve() { return curveTypeAttr != %g; }",
-            skgpu::tess::kCubicCurveType).c_str());
+        "bool is_conic_curve() { return curveTypeAttr != %d; }",
+            static_cast<int>(skgpu::tess::kCubicCurveType)).c_str());
     } else {
         args.fVertBuilder->insertFunction(
         "bool is_conic_curve() { return isinf(pts23Attr.w); }");

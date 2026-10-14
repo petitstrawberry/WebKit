@@ -26,6 +26,9 @@
 #include <cstdint>
 #include <memory>
 
+static_assert(skgpu::tess::kCubicCurveType == static_cast<int>(skgpu::tess::kCubicCurveType));
+static_assert(skgpu::tess::kTriangularConicCurveType == static_cast<int>(skgpu::tess::kTriangularConicCurveType));
+
 class GrAppliedHardClip;
 
 using namespace skia_private;
@@ -155,12 +158,12 @@ std::unique_ptr<GrGeometryProcessor::ProgramImpl> MiddleOutShader::makeProgramIm
             if (middleOutShader.fAttribs & PatchAttribs::kExplicitCurveType) {
                 v->insertFunction(SkStringPrintf(
                 "bool is_conic_curve() {"
-                    "return curveType != %g;"
-                "}", skgpu::tess::kCubicCurveType).c_str());
+                    "return curveType != %d;"
+                "}", static_cast<int>(skgpu::tess::kCubicCurveType)).c_str());
                 v->insertFunction(SkStringPrintf(
                 "bool is_triangular_conic_curve() {"
-                    "return curveType == %g;"
-                "}", skgpu::tess::kTriangularConicCurveType).c_str());
+                    "return curveType == %d;"
+                "}", static_cast<int>(skgpu::tess::kTriangularConicCurveType)).c_str());
             } else {
                 SkASSERT(shaderCaps.fInfinitySupport);
                 v->insertFunction(

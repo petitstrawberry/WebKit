@@ -3,6 +3,7 @@
 #include <skia/core/SkColorSpace.h>
 #include <skia/core/SkPaint.h>
 #include <skia/core/SkSurface.h>
+#include <skia/core/SkString.h>
 #include <skia/gpu/ganesh/GrDirectContext.h>
 #include <skia/gpu/ganesh/GrContextOptions.h>
 #include <skia/gpu/ganesh/SkSurfaceGanesh.h>
@@ -144,6 +145,13 @@ public:
 
 int probe()
 {
+    char scalar[kSkStrAppendScalar_MaxSize + 1];
+    auto* scalarEnd = SkStrAppendScalar(scalar, 1.25f);
+    *scalarEnd = '\0';
+    if (SkString(scalar) != SkString("1.25")) {
+        std::fprintf(stderr, "SKIA_VULKAN_FAIL scalar conversion\n");
+        return 17;
+    }
     auto cpus = sysconf(_SC_NPROCESSORS_ONLN);
     if (cpus <= 0) { std::fprintf(stderr, "SKIA_VULKAN_FAIL online CPU query\n"); return 16; }
     std::fprintf(stderr, "SKIA_VULKAN_CPUS %ld\n", cpus);
