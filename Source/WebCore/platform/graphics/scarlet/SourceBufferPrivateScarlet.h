@@ -6,6 +6,7 @@
 #if USE(SCARLET_MEDIA) && ENABLE(MEDIA_SOURCE)
 #include "SourceBufferPrivate.h"
 #include "FloatSize.h"
+#include "FloatSizeHash.h"
 #include "ScarletMedia.h"
 #include "SourceBufferPrivateClient.h"
 #include <wtf/HashMap.h>
