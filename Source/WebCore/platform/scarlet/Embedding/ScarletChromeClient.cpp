@@ -47,6 +47,7 @@
 #include "SearchPopupMenu.h"
 #include "TextIndicator.h"
 #include <cstdio>
+#include <cstdlib>
 #include <wtf/TZoneMallocInlines.h>
 #include <wtf/WeakPtr.h>
 #include <wtf/text/CString.h>
@@ -126,10 +127,19 @@ public:
     }
 
 private:
-    void repaint() const { m_state.needsPaint = true; m_state.fullPaint = true; }
-    void repaint(const IntRect& rect) const {
+    void repaint(const char* reason) const
+    {
+        if (m_tracePaintInvalidations)
+            fprintf(stderr, "SCARLET_WEBCORE_PAINT_INVALIDATION reason=%s scope=full already_dirty=%u\n", reason, static_cast<unsigned>(m_state.needsPaint));
+        m_state.needsPaint = true;
+        m_state.fullPaint = true;
+    }
+    void repaint(const IntRect& rect, const char* reason) const
+    {
         if (rect.isEmpty())
             return;
+        if (m_tracePaintInvalidations)
+            fprintf(stderr, "SCARLET_WEBCORE_PAINT_INVALIDATION reason=%s scope=rect x=%d y=%d width=%d height=%d already_dirty=%u\n", reason, rect.x(), rect.y(), rect.width(), rect.height(), static_cast<unsigned>(m_state.needsPaint));
         m_state.needsPaint = true;
         m_state.dirtyRect.unite(rect);
     }
@@ -144,22 +154,22 @@ private:
 
     // Native focus is supplied by the embedding. DOM focus and focus-ring
     // painting remain WebCore's responsibility.
-    void focus() final { repaint(); }
-    void unfocus() final { repaint(); }
+    void focus() final { repaint(__func__); }
+    void unfocus() final { repaint(__func__); }
     bool canTakeFocus(FocusDirection) const final { return false; }
     void takeFocus(FocusDirection) final { unsupported("Scarlet embedding cannot transfer focus to native chrome"_s); }
-    void focusedElementChanged(Element*, LocalFrame*, FocusOptions, BroadcastFocusedElement) final { repaint(); }
-    void focusedFrameChanged(Frame*) final { repaint(); }
-    void elementDidFocus(Element&, const FocusOptions&) final { repaint(); }
-    void elementDidBlur(Element&) final { repaint(); }
-    void elementDidRefocus(Element&, const FocusOptions&) final { repaint(); }
+    void focusedElementChanged(Element*, LocalFrame*, FocusOptions, BroadcastFocusedElement) final { repaint(__func__); }
+    void focusedFrameChanged(Frame*) final { repaint(__func__); }
+    void elementDidFocus(Element&, const FocusOptions&) final { repaint(__func__); }
+    void elementDidBlur(Element&) final { repaint(__func__); }
+    void elementDidRefocus(Element&, const FocusOptions&) final { repaint(__func__); }
 
     RefPtr<Page> createWindow(LocalFrame&, const String&, const WindowFeatures&, const NavigationAction&) final
     {
         unsupported("Scarlet embedding does not create additional windows"_s);
         return nullptr;
     }
-    void show() final { repaint(); }
+    void show() final { repaint(__func__); }
     bool canRunModal() const final { return false; }
     void runModal() final { unsupported("Scarlet embedding does not run modal windows"_s); }
     bool isPopup() const final { return false; }
@@ -201,15 +211,15 @@ private:
     std::optional<PointerCharacteristics> pointerCharacteristicsOfPrimaryPointingDevice() const final { return PointerCharacteristics::Fine; }
     OptionSet<PointerCharacteristics> pointerCharacteristicsOfAllAvailablePointingDevices() const final { return PointerCharacteristics::Fine; }
 
-    void invalidateRootView(const IntRect& rect) final { repaint(rect); }
-    void invalidateContentsAndRootView(const IntRect& rect) final { repaint(rect); }
-    void invalidateContentsForSlowScroll(const IntRect& rect) final { repaint(rect); }
+    void invalidateRootView(const IntRect& rect) final { repaint(rect, __func__); }
+    void invalidateContentsAndRootView(const IntRect& rect) final { repaint(rect, __func__); }
+    void invalidateContentsForSlowScroll(const IntRect& rect) final { repaint(rect, __func__); }
     // No native scroll blit is attempted: the host repaints the actual WebCore
     // view at its updated scroll position on the next tick.
-    void scroll(const IntSize&, const IntRect&, const IntRect&) final { repaint(); }
+    void scroll(const IntSize&, const IntRect&, const IntRect&) final { repaint(__func__); }
     void triggerRenderingUpdate() final { m_state.needsRenderingUpdate = true; }
     bool scheduleRenderingUpdate() final { m_state.needsRenderingUpdate = true; return true; }
-    void setNeedsOneShotDrawingSynchronization() final { repaint(); }
+    void setNeedsOneShotDrawingSynchronization() final { repaint(__func__); }
     void renderingUpdateFramesPerSecondChanged() final { m_state.needsRenderingUpdate = true; }
     void frameViewLayoutOrVisualViewportChanged(const LocalFrameView&) final
     {
@@ -227,14 +237,14 @@ private:
     IntRect rootViewToAccessibilityScreen(const IntRect& rect) const final { return rect; }
 
     PlatformPageClient platformPageClient() const final { return nullptr; }
-    void rootFrameAdded(const LocalFrame&) final { repaint(); }
-    void rootFrameRemoved(const LocalFrame&) final { repaint(); }
-    void mainFrameDidChange() final { repaint(); }
-    void didFinishLoadingImageForElement(HTMLImageElement&) final { repaint(); }
-    void didFinishLoadingImageForSVGImage(SVGImageElement&) final { repaint(); }
-    void contentsSizeChanged(LocalFrame&, const IntSize&) const final { repaint(); }
-    void intrinsicContentsSizeChanged(const IntSize&) const final { repaint(); }
-    void scrollOriginDidChange(const LocalFrame&) const final { repaint(); }
+    void rootFrameAdded(const LocalFrame&) final { repaint(__func__); }
+    void rootFrameRemoved(const LocalFrame&) final { repaint(__func__); }
+    void mainFrameDidChange() final { repaint(__func__); }
+    void didFinishLoadingImageForElement(HTMLImageElement&) final { repaint(__func__); }
+    void didFinishLoadingImageForSVGImage(SVGImageElement&) final { repaint(__func__); }
+    void contentsSizeChanged(LocalFrame&, const IntSize&) const final { repaint(__func__); }
+    void intrinsicContentsSizeChanged(const IntSize&) const final { repaint(__func__); }
+    void scrollOriginDidChange(const LocalFrame&) const final { repaint(__func__); }
 
     // ABI v1 has no native tooltip or cursor-shape channel. Hover hit testing,
     // CSS state and mouse input are still performed by WebCore.
@@ -356,6 +366,7 @@ private:
     bool isEmptyChromeClient() const final { return false; }
 
     ScarletFrameLoadState& m_state;
+    const bool m_tracePaintInvalidations { std::getenv("MYRICA_WEBKIT_TRACE_PAINT") != nullptr };
 };
 
 WTF_MAKE_TZONE_ALLOCATED_IMPL(ScarletChromeClient);
