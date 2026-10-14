@@ -242,6 +242,13 @@ void MediaPlayerPrivateScarlet::setNetworkState(MediaPlayer::NetworkState state)
 void MediaPlayerPrivateScarlet::fail(MediaPlayer::NetworkState state)
 {
     m_timer.stop();
+    ++m_seekGeneration;
+    m_seekTarget = MediaTime::invalidTime();
+    m_seekReadyForCompletion = false;
+#if ENABLE(MEDIA_SOURCE)
+    if (m_mediaSource)
+        m_mediaSource->cancelPendingWaitForTarget();
+#endif
     if (m_session)
         scarlet_media_session_pause(m_session);
     if (auto resource = std::exchange(m_resource, nullptr)) {
