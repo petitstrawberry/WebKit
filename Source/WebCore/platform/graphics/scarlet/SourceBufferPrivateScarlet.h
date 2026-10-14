@@ -5,6 +5,7 @@
 #pragma once
 #if USE(SCARLET_MEDIA) && ENABLE(MEDIA_SOURCE)
 #include "SourceBufferPrivate.h"
+#include "FloatSize.h"
 #include "ScarletMedia.h"
 #include "SourceBufferPrivateClient.h"
 #include <wtf/HashMap.h>
@@ -49,6 +50,7 @@ private:
     ScarletMediaParser* m_parser;
     RunLoop::Timer m_timer;
     HashMap<uint64_t, TrackID> m_trackIdentifiers;
+    HashMap<TrackID, FloatSize> m_trackSizes;
     HashSet<TrackID> m_waitingTracks;
     HashSet<TrackID> m_fullyEnqueuedTracks;
     bool m_endOfStream { false };

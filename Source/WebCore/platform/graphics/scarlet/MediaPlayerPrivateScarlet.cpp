@@ -64,32 +64,32 @@ MediaPlayer::SupportsType MediaPlayerPrivateScarlet::supportsType(const MediaEng
 class ScarletMediaResourceClient final : public PlatformMediaResourceClient {
 public:
     explicit ScarletMediaResourceClient(MediaPlayerPrivateScarlet& player) : m_player(player) { }
-    void responseReceived(PlatformMediaResource&, const ResourceResponse& response, CompletionHandler<void(ShouldContinuePolicyCheck)>&& completion) final
+    void responseReceived(PlatformMediaResource& resource, const ResourceResponse& response, CompletionHandler<void(ShouldContinuePolicyCheck)>&& completion) final
     {
-        if (auto player = m_player.get()) {
+        if (auto player = m_player.get(); player && player->m_resource.get() == &resource) {
             player->receiveResponse(response);
             completion(player->networkState() == MediaPlayer::NetworkState::Loading ? ShouldContinuePolicyCheck::Yes : ShouldContinuePolicyCheck::No);
         } else
             completion(ShouldContinuePolicyCheck::No);
     }
-    void dataReceived(PlatformMediaResource&, const SharedBuffer& data) final
+    void dataReceived(PlatformMediaResource& resource, const SharedBuffer& data) final
     {
-        if (auto player = m_player.get())
+        if (auto player = m_player.get(); player && player->m_resource.get() == &resource)
             player->receiveData(data);
     }
-    void loadFinished(PlatformMediaResource&, const NetworkLoadMetrics&) final
+    void loadFinished(PlatformMediaResource& resource, const NetworkLoadMetrics&) final
     {
-        if (auto player = m_player.get())
+        if (auto player = m_player.get(); player && player->m_resource.get() == &resource)
             player->finishLoading();
     }
-    void loadFailed(PlatformMediaResource&, const ResourceError&) final
+    void loadFailed(PlatformMediaResource& resource, const ResourceError&) final
     {
-        if (auto player = m_player.get())
+        if (auto player = m_player.get(); player && player->m_resource.get() == &resource)
             player->fail(MediaPlayer::NetworkState::NetworkError);
     }
-    void accessControlCheckFailed(PlatformMediaResource&, const ResourceError&) final
+    void accessControlCheckFailed(PlatformMediaResource& resource, const ResourceError&) final
     {
-        if (auto player = m_player.get())
+        if (auto player = m_player.get(); player && player->m_resource.get() == &resource)
             player->fail(MediaPlayer::NetworkState::NetworkError);
     }
 private:

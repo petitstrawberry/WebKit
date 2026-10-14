@@ -116,6 +116,8 @@ void SourceBufferPrivateScarlet::receiveTrack(const ScarletMediaTrack& parsedTra
     }
     auto track = parsedTrack;
     track.identifier = m_trackIdentifiers.ensure(parsedTrack.identifier, [&] { return parent->allocateTrackIdentifier(); }).iterator->value;
+    if (track.kind == SCARLET_MEDIA_VIDEO)
+        m_trackSizes.set(track.identifier, FloatSize { static_cast<float>(track.width), static_cast<float>(track.height) });
     if (!nativePlayer->configureTrack(track)) {
         finishAppend(false);
         return;
@@ -165,7 +167,7 @@ void SourceBufferPrivateScarlet::poll()
                 return;
             }
             event.sample.track = identifier->value;
-            didReceiveSample(MediaSampleScarlet::create(event.sample));
+            didReceiveSample(MediaSampleScarlet::create(event.sample, m_trackSizes.get(event.sample.track)));
         } else if (event.kind == SCARLET_MEDIA_APPEND_DONE) {
             if (!m_outstandingAppends) {
                 finishAppend(false);
