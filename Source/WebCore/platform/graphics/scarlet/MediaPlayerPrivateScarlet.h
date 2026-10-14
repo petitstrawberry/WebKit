@@ -6,6 +6,7 @@
 #if USE(SCARLET_MEDIA)
 #include "MediaPlayerPrivate.h"
 #include "ColorSpace.h"
+#include "VideoFrameMetadata.h"
 #include "MediaSampleScarlet.h"
 #include "PlatformMediaResourceLoader.h"
 #include "ScarletMedia.h"
@@ -62,8 +63,12 @@ public:
     bool hasAvailableVideoFrame() const final { return !!m_image; }
     bool didPassCORSAccessCheck() const final { return m_passedCors; }
     bool ended() const final { return m_status.ended; }
-    unsigned decodedFrameCount() const final { return m_status.decoded_frames; }
-    unsigned droppedFrameCount() const final { return m_status.dropped_frames; }
+    unsigned decodedFrameCount() const final;
+    unsigned droppedFrameCount() const final;
+    std::optional<VideoPlaybackQualityMetrics> videoPlaybackQualityMetrics() final;
+    std::optional<VideoFrameMetadata> videoFrameMetadata() final;
+    void startVideoFrameMetadataGathering() final { m_gatheringVideoFrameMetadata = true; }
+    void stopVideoFrameMetadataGathering() final { m_gatheringVideoFrameMetadata = false; m_videoFrameMetadata.reset(); }
     String engineDescription() const final { return "Scarlet native media / Skia Vulkan"_s; }
 
     bool configureTrack(const ScarletMediaTrack&);
@@ -87,6 +92,7 @@ private:
     void setNetworkState(MediaPlayer::NetworkState);
     void releaseParserEvent();
     void updateBuffered();
+    ScarletMediaStatus statusSnapshot() const;
 
     ThreadSafeWeakPtr<MediaPlayer> m_player;
     RunLoop::Timer m_timer;
@@ -94,6 +100,13 @@ private:
     ScarletMediaParser* m_parser { nullptr };
     RefPtr<PlatformMediaResource> m_resource;
     RefPtr<NativeImage> m_image;
+    uint64_t m_videoFrameSerial { 0 };
+    uint64_t m_paintedVideoFrameSerial { 0 };
+    uint64_t m_presentedVideoFrames { 0 };
+    double m_frameMediaTime { 0 };
+    std::optional<VideoFrameMetadata> m_videoFrameMetadata;
+    bool m_gatheringVideoFrameMetadata { false };
+    bool m_notifiedFirstVideoFrame { false };
 #if ENABLE(MEDIA_SOURCE)
     RefPtr<MediaSourcePrivateScarlet> m_mediaSource;
 #endif

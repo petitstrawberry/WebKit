@@ -23,6 +23,8 @@
 #include <wtf/Scope.h>
 #include <wtf/TZoneMallocInlines.h>
 #include <cmath>
+#include <limits>
+#include <wtf/MonotonicTime.h>
 
 namespace WebCore {
 class MediaPlayerFactoryScarlet final : public MediaPlayerFactory {
@@ -222,6 +224,12 @@ void MediaPlayerPrivateScarlet::cancelLoad()
     m_seekable.clear();
     m_image = nullptr;
     m_size = { };
+    m_videoFrameSerial = m_paintedVideoFrameSerial = m_presentedVideoFrames = 0;
+    m_frameMediaTime = 0;
+    m_videoFrameMetadata.reset();
+    m_notifiedFirstVideoFrame = false;
+    // Metadata gathering is a client request. MediaPlayer may start it before
+    // invoking load(), so preserve that request across cancel/reload.
     m_status = { };
     m_status.paused = true;
     m_inputFinished = m_endSubmitted = m_demuxEnded = m_replayPending = m_passedCors = m_loadingProgress = false;
@@ -331,6 +339,7 @@ void MediaPlayerPrivateScarlet::removeTrack(TrackID identifier)
         scarlet_media_session_remove_track(m_session, identifier);
     if (removedVideo) {
         m_image = nullptr;
+        m_videoFrameMetadata.reset();
         m_size = { };
         if (auto player = m_player.get()) {
             player->sizeChanged();
@@ -517,21 +526,80 @@ void MediaPlayerPrivateScarlet::updateFrame()
         return;
     }
     m_image = NativeImage::create(WTF::move(image), context);
+    ++m_videoFrameSerial;
+    m_frameMediaTime = frame.presentation_us / 1000000.0;
     auto size = FloatSize { static_cast<float>(frame.width), static_cast<float>(frame.height) };
     if (auto player = m_player.get()) {
         if (m_size != size) {
             m_size = size;
             player->sizeChanged();
         }
+        if (!m_notifiedFirstVideoFrame) {
+            m_notifiedFirstVideoFrame = true;
+            player->firstVideoFrameAvailable();
+        }
         if (m_visible)
             player->repaint();
     }
 }
 
+static unsigned boundedFrameCount(uint64_t count)
+{
+    return static_cast<unsigned>(std::min<uint64_t>(count, std::numeric_limits<unsigned>::max()));
+}
+
+ScarletMediaStatus MediaPlayerPrivateScarlet::statusSnapshot() const
+{
+    auto status = m_status;
+    if (m_session)
+        scarlet_media_session_status(m_session, &status);
+    return status;
+}
+unsigned MediaPlayerPrivateScarlet::decodedFrameCount() const
+{
+    return boundedFrameCount(statusSnapshot().decoded_frames);
+}
+unsigned MediaPlayerPrivateScarlet::droppedFrameCount() const
+{
+    return boundedFrameCount(statusSnapshot().dropped_frames);
+}
+std::optional<VideoPlaybackQualityMetrics> MediaPlayerPrivateScarlet::videoPlaybackQualityMetrics()
+{
+    auto status = statusSnapshot();
+    return VideoPlaybackQualityMetrics {
+        boundedFrameCount(status.decoded_frames),
+        boundedFrameCount(status.dropped_frames),
+        0, 0,
+        boundedFrameCount(m_presentedVideoFrames)
+    };
+}
+std::optional<VideoFrameMetadata> MediaPlayerPrivateScarlet::videoFrameMetadata()
+{
+    return std::exchange(m_videoFrameMetadata, std::nullopt);
+}
 void MediaPlayerPrivateScarlet::paint(GraphicsContext& context, const FloatRect& rectangle)
 {
-    if (m_image)
-        context.drawNativeImage(*m_image, rectangle, FloatRect { FloatPoint { }, m_size });
+    if (!m_image || context.paintingDisabled())
+        return;
+    context.drawNativeImage(*m_image, rectangle, FloatRect { FloatPoint { }, m_size });
+    if (m_paintedVideoFrameSerial == m_videoFrameSerial)
+        return;
+    m_paintedVideoFrameSerial = m_videoFrameSerial;
+    ++m_presentedVideoFrames;
+    if (!m_gatheringVideoFrameMetadata)
+        return;
+    auto now = MonotonicTime::now().secondsSinceEpoch().seconds();
+    m_videoFrameMetadata = VideoFrameMetadata {
+        .presentationTime = now,
+        .expectedDisplayTime = now,
+        .width = static_cast<unsigned>(m_size.width()),
+        .height = static_cast<unsigned>(m_size.height()),
+        .mediaTime = m_frameMediaTime,
+        .presentedFrames = boundedFrameCount(m_presentedVideoFrames)
+    };
+    // Document keeps the VideoFrameCallbacks rendering step scheduled while
+    // requests remain pending. This actual compositor submission is consumed
+    // on the next step, without repainting the same image to make a callback.
 }
 void MediaPlayerPrivateScarlet::play()
 {
@@ -625,6 +693,7 @@ Ref<MediaTimePromise> MediaPlayerPrivateScarlet::seekToTarget(const SeekTarget& 
     m_seekTarget = target.time;
     scarlet_media_session_seek(m_session, target.time.toDouble());
     m_image = nullptr;
+    m_videoFrameMetadata.reset();
 #if ENABLE(MEDIA_SOURCE)
     if (m_mediaSource) {
         Ref protectedThis { *this };
