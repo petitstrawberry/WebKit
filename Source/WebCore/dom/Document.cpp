@@ -9133,7 +9133,8 @@ void Document::dispatchPagehideEvent(PageshowEventPersistence persisted)
 // https://www.w3.org/TR/css-view-transitions-2/#vt-rule-algo
 Variant<Document::SkipTransition, Vector<AtomString>> Document::resolveViewTransitionRule()
 {
-    if (hidden())
+    // Capturing a view transition requires composited graphics layers.
+    if (hidden() || !settings().acceleratedCompositingEnabled())
         return SkipTransition { };
 
     RefPtr rule = protect(styleScope().resolver())->viewTransitionRule();
@@ -12509,6 +12510,13 @@ RefPtr<ViewTransition> Document::startViewTransition(StartViewTransitionCallback
 
     if (hidden()) {
         viewTransition->skipViewTransition(Exception { ExceptionCode::InvalidStateError, "View transition was skipped because document visibility state is hidden."_s });
+        return viewTransition;
+    }
+
+    if (!settings().acceleratedCompositingEnabled()) {
+        // Use the normal skip algorithm so the update callback still runs and
+        // updateCallbackDone/finished settle without requesting graphics layers.
+        viewTransition->skipViewTransition(Exception { ExceptionCode::InvalidStateError, "View transition was skipped because compositing is unavailable."_s });
         return viewTransition;
     }
 
