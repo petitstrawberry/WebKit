@@ -90,7 +90,7 @@ void SourceBufferPrivateScarlet::submitInput()
     // Each accepted parser append has its own completion identifier. Large JS
     // appends are streamed to the bounded bridge without holding extra copies.
     do {
-        auto size = std::min<size_t>(bytes.size() - m_appendOffset, 1024 * 1024);
+        auto size = std::min<size_t>(bytes.size() - m_appendOffset, SCARLET_MEDIA_MAX_APPEND_BYTES);
         auto result = scarlet_media_parser_append(m_parser, bytes.data() + m_appendOffset, size, m_appendIdentifier + 1);
         if (result == SCARLET_MEDIA_AGAIN)
             return;

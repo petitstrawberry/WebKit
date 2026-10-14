@@ -162,7 +162,7 @@ void MediaPlayerPrivateScarlet::receiveData(const SharedBuffer& data)
     }
     auto bytes = data.span();
     for (size_t offset = 0; offset < bytes.size();) {
-        auto size = std::min<size_t>(bytes.size() - offset, 1024 * 1024);
+        auto size = std::min<size_t>(bytes.size() - offset, SCARLET_MEDIA_MAX_APPEND_BYTES);
         m_input.append(SharedBuffer::create(bytes.subspan(offset, size)));
         offset += size;
     }

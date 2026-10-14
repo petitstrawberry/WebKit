@@ -16,6 +16,7 @@ typedef struct ScarletMediaSession ScarletMediaSession;
 /* All input bytes are copied before a successful call returns. No WebCore
  * object or callback crosses the decoder thread. Zero is success, one is
  * bounded-queue backpressure, negative values are permanent failures. */
+enum { SCARLET_MEDIA_MAX_APPEND_BYTES = 512 * 1024 };
 enum ScarletMediaResult { SCARLET_MEDIA_OK = 0, SCARLET_MEDIA_AGAIN = 1, SCARLET_MEDIA_ERROR = -1 };
 enum ScarletMediaCodec { SCARLET_MEDIA_AVC = 1, SCARLET_MEDIA_AAC = 2 };
 enum ScarletMediaTrackKind { SCARLET_MEDIA_VIDEO = 1, SCARLET_MEDIA_AUDIO = 2 };
