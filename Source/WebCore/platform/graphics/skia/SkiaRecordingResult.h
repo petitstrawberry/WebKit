@@ -84,7 +84,9 @@ public:
 #endif
 
     // Check if GPU atlases are ready.
+#if USE(COORDINATED_GRAPHICS)
     bool hasGPUAtlases() const { return !m_gpuAtlases.isEmpty(); }
+#endif
 
     // Get prepared GPU atlases (for worker threads to rewrap).
 #if USE(COORDINATED_GRAPHICS)
