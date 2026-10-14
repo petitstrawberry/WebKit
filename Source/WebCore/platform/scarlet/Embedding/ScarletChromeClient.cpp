@@ -211,7 +211,13 @@ private:
     bool scheduleRenderingUpdate() final { m_state.needsRenderingUpdate = true; return true; }
     void setNeedsOneShotDrawingSynchronization() final { repaint(); }
     void renderingUpdateFramesPerSecondChanged() final { m_state.needsRenderingUpdate = true; }
-    void frameViewLayoutOrVisualViewportChanged(const LocalFrameView&) final { repaint(); }
+    void frameViewLayoutOrVisualViewportChanged(const LocalFrameView&) final
+    {
+        // This is a post-layout observation, also sent for an unchanged
+        // viewport. It is not a paint invalidation. Host resize explicitly
+        // dirties the view; WebCore scroll and renderer invalidations reach
+        // scroll(), invalidateContentsAndRootView() and the slow-scroll path.
+    }
 
     // ABI coordinates are native CSS pixels in the embedding's viewport.
     IntPoint screenToRootView(const IntPoint& point) const final { return point; }
