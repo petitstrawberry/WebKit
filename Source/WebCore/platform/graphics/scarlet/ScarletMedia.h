@@ -109,6 +109,9 @@ int32_t scarlet_media_session_configure(ScarletMediaSession*, const ScarletMedia
 int32_t scarlet_media_session_enqueue(ScarletMediaSession*, const ScarletMediaSample*);
 uint32_t scarlet_media_session_has_capacity(ScarletMediaSession*, uint64_t track);
 void scarlet_media_session_flush(ScarletMediaSession*, uint64_t track);
+/* Removal destroys track configuration and invalidates its decoder generation;
+ * flushing preserves configuration for seek and coded-frame overlap. */
+void scarlet_media_session_remove_track(ScarletMediaSession*, uint64_t track);
 void scarlet_media_session_end(ScarletMediaSession*, uint64_t track);
 void scarlet_media_session_play(ScarletMediaSession*);
 void scarlet_media_session_pause(ScarletMediaSession*);

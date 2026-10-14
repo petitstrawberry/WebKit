@@ -210,7 +210,7 @@ void SourceBufferPrivateScarlet::removedFromMediaSource()
     m_deferredSample = nullptr;
     if (auto nativePlayer = player()) {
         for (auto& [local, identifier] : m_trackIdentifiers)
-            nativePlayer->flushTrack(identifier);
+            nativePlayer->removeTrack(identifier);
     }
     m_parent = nullptr;
     SourceBufferPrivate::removedFromMediaSource();

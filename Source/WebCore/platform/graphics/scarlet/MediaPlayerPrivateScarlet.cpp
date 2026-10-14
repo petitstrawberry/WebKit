@@ -322,6 +322,23 @@ void MediaPlayerPrivateScarlet::flushTrack(TrackID track)
     if (m_session)
         scarlet_media_session_flush(m_session, track);
 }
+void MediaPlayerPrivateScarlet::removeTrack(TrackID identifier)
+{
+    auto track = m_tracks.find(identifier);
+    bool removedVideo = track != m_tracks.end() && track->value.kind == SCARLET_MEDIA_VIDEO;
+    m_tracks.remove(identifier);
+    if (m_session)
+        scarlet_media_session_remove_track(m_session, identifier);
+    if (removedVideo) {
+        m_image = nullptr;
+        m_size = { };
+        if (auto player = m_player.get()) {
+            player->sizeChanged();
+            player->repaint();
+        }
+    }
+    wake();
+}
 void MediaPlayerPrivateScarlet::endTrack(TrackID track)
 {
     if (m_session)

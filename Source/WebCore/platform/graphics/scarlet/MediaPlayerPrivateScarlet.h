@@ -70,6 +70,7 @@ public:
     bool enqueueSample(const MediaSampleScarlet&);
     bool hasCapacity(TrackID) const;
     void flushTrack(TrackID);
+    void removeTrack(TrackID);
     void endTrack(TrackID);
     void wake();
 private:
