@@ -9,6 +9,8 @@
 #define SkAutoLocaleSetter_DEFINED
 
 #include "include/private/SkNoncopyable.h"
+#include "include/private/SkAssert.h"
+#include <cstring>
 
 #if defined(SK_BUILD_FOR_WIN)
 #include <optional>
@@ -27,7 +29,7 @@
 #define HAVE_XLOCALE 0
 #endif
 
-#if defined(SK_BUILD_FOR_ANDROID) || defined(__UCLIBC__) || defined(_NEWLIB_VERSION)
+#if defined(SK_BUILD_FOR_ANDROID) || defined(__UCLIBC__) || defined(_NEWLIB_VERSION) || defined(__scarlet__)
 #define HAVE_LOCALE_T 0
 #else
 #define HAVE_LOCALE_T 1
@@ -40,7 +42,11 @@
 class SkAutoLocaleSetter : public SkNoncopyable {
 public:
     SkAutoLocaleSetter (const char* name) {
-#if defined(SK_BUILD_FOR_WIN)
+#if defined(__scarlet__)
+        // The native runtime supports only C/POSIX. Numeric conversion is
+        // already locale-independent; no global or per-thread locale changes.
+        if (!name || (std::strcmp(name, "C") && std::strcmp(name, "POSIX"))) SkUNREACHABLE;
+#elif defined(SK_BUILD_FOR_WIN)
         fOldPerThreadLocale = _configthreadlocale(_ENABLE_PER_THREAD_LOCALE);
         char* oldLocale = setlocale(LC_ALL, name);
         if (oldLocale) {

@@ -2,6 +2,8 @@
 # Keep the list explicit so new upstream platform files are reviewed on update.
 target_compile_definitions(Skia PUBLIC SK_VULKAN SK_USE_INTERNAL_VULKAN_HEADERS SK_BUILD_FOR_UNIX)
 target_sources(Skia PRIVATE
+    src/gpu/MutableTextureState.cpp
+    src/gpu/ganesh/GrUniformDataManager.cpp
     src/gpu/ganesh/vk/GrVkBackendSemaphore.cpp
     src/gpu/ganesh/vk/GrVkBackendSurface.cpp
     src/gpu/ganesh/vk/GrVkBuffer.cpp
