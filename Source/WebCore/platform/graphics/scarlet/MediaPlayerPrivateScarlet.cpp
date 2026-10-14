@@ -194,10 +194,13 @@ void MediaPlayerPrivateScarlet::releaseParserEvent()
 void MediaPlayerPrivateScarlet::cancelLoad()
 {
     m_timer.stop();
+    ++m_seekGeneration;
     m_seekPromise.reset();
 #if ENABLE(MEDIA_SOURCE)
-    if (m_mediaSource)
+    if (m_mediaSource) {
+        m_mediaSource->cancelPendingWaitForTarget();
         m_mediaSource->setPlayer(nullptr);
+    }
     m_mediaSource = nullptr;
 #endif
     if (auto resource = std::exchange(m_resource, nullptr)) {
@@ -585,6 +588,7 @@ Ref<MediaTimePromise> MediaPlayerPrivateScarlet::seekToTarget(const SeekTarget& 
 {
     if (!m_session)
         return MediaTimePromise::createAndReject(PlatformMediaError::NotReady);
+    auto seekGeneration = ++m_seekGeneration;
     m_seekPromise.emplace(PlatformMediaError::Cancelled);
     auto seekPromise = m_seekPromise->promise();
     m_seekReadyForCompletion = false;
@@ -594,14 +598,21 @@ Ref<MediaTimePromise> MediaPlayerPrivateScarlet::seekToTarget(const SeekTarget& 
 #if ENABLE(MEDIA_SOURCE)
     if (m_mediaSource) {
         Ref protectedThis { *this };
-        m_mediaSource->waitForTarget(target)->whenSettled(RunLoop::currentSingleton(), [protectedThis](auto&& result) {
+        Ref source { *m_mediaSource };
+        source->waitForTarget(target)->whenSettled(RunLoop::currentSingleton(), [protectedThis, source, seekGeneration](auto&& result) {
+            if (protectedThis->m_seekGeneration != seekGeneration || protectedThis->m_mediaSource.get() != source.ptr())
+                return;
             if (!result) {
+                protectedThis->m_seekTarget = MediaTime::invalidTime();
                 if (auto promise = std::exchange(protectedThis->m_seekPromise, std::nullopt))
                     promise->reject(PlatformMediaError::Cancelled);
                 return;
             }
-            protectedThis->m_mediaSource->reenqueueMediaForTime(*result)->whenSettled(RunLoop::currentSingleton(), [protectedThis](auto&& result) {
+            source->reenqueueMediaForTime(*result)->whenSettled(RunLoop::currentSingleton(), [protectedThis, source, seekGeneration](auto&& result) {
+                if (protectedThis->m_seekGeneration != seekGeneration || protectedThis->m_mediaSource.get() != source.ptr())
+                    return;
                 if (!result) {
+                    protectedThis->m_seekTarget = MediaTime::invalidTime();
                     if (auto promise = std::exchange(protectedThis->m_seekPromise, std::nullopt))
                         promise->reject(PlatformMediaError::Cancelled);
                 }

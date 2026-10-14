@@ -107,6 +107,7 @@ private:
     Deque<Ref<SharedBuffer>> m_input;
     size_t m_inputBytes { 0 };
     uint64_t m_appendIdentifier { 0 };
+    uint64_t m_seekGeneration { 0 };
     std::optional<ScarletMediaParserEvent> m_parserEvent;
     std::optional<MediaTimePromise::AutoRejectProducer> m_seekPromise;
     MediaTime m_seekTarget { MediaTime::invalidTime() };
