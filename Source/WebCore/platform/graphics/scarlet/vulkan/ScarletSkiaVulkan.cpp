@@ -1,4 +1,5 @@
-// Native Skia/Vulkan contract probe. No platform GL, direct SGFX, or CPU surface.
+// Native Ganesh Vulkan device and owned shared GPU surfaces.
+#include "ScarletSkiaVulkan.h"
 #include <skia/core/SkCanvas.h>
 #include <skia/core/SkColorSpace.h>
 #include <skia/core/SkPaint.h>
@@ -19,8 +20,10 @@
 #include <memory>
 #include <vector>
 #include <unistd.h>
+#include <thread>
+#include <cstdlib>
 
-namespace {
+namespace WebCore {
 struct Dispatch {
     PFN_vkGetInstanceProcAddr instanceProc { };
     PFN_vkGetDeviceProcAddr deviceProc { };
@@ -119,15 +122,12 @@ private:
     uint64_t m_bytes { };
 };
 
-class Context {
+struct ScarletSkiaVulkan::State {
 public:
-    ~Context()
+    ~State()
     {
-        surface = nullptr;
+        checkThread();
         context = nullptr;
-        if (exportedHandle >= 0) close(exportedHandle);
-        if (sharedImage) dispatch.deviceFunction<PFN_vkDestroyImage>("vkDestroyImage")(dispatch.device, sharedImage, nullptr);
-        if (sharedMemory) allocator->freeMemory(sharedMemory);
         allocator = nullptr;
         if (dispatch.device) dispatch.deviceFunction<PFN_vkDestroyDevice>("vkDestroyDevice")(dispatch.device, nullptr);
         if (dispatch.instance) dispatch.instanceFunction<PFN_vkDestroyInstance>("vkDestroyInstance")(dispatch.instance, nullptr);
@@ -137,32 +137,22 @@ public:
     Dispatch dispatch;
     sk_sp<Allocator> allocator;
     sk_sp<GrDirectContext> context;
-    sk_sp<SkSurface> surface;
-    VkImage sharedImage { };
-    skgpu::VulkanBackendMemory sharedMemory { };
-    int32_t exportedHandle { -1 };
+    VkQueue queue { };
+    uint32_t queueIndex { };
+    std::thread::id ownerThread { std::this_thread::get_id() };
+    void checkThread() const { if (ownerThread != std::this_thread::get_id()) std::abort(); }
 };
 
-int probe()
+template<typename DeviceState>
+int initialize(DeviceState& owner)
 {
-    char scalar[kSkStrAppendScalar_MaxSize + 1];
-    auto* scalarEnd = SkStrAppendScalar(scalar, 1.25f);
-    *scalarEnd = '\0';
-    if (SkString(scalar) != SkString("1.25")) {
-        std::fprintf(stderr, "SKIA_VULKAN_FAIL scalar conversion\n");
-        return 17;
-    }
-    auto cpus = sysconf(_SC_NPROCESSORS_ONLN);
-    if (cpus <= 0) { std::fprintf(stderr, "SKIA_VULKAN_FAIL online CPU query\n"); return 16; }
-    std::fprintf(stderr, "SKIA_VULKAN_CPUS %ld\n", cpus);
-    Context owner;
     owner.library = dlopen("/lib/libvulkan.so.1", RTLD_NOW | RTLD_GLOBAL);
     if (!owner.library) { std::fprintf(stderr, "SKIA_VULKAN_FAIL loader: %s\n", dlerror()); return 1; }
-    auto& dispatch = owner.dispatch;
+    Dispatch& dispatch = owner.dispatch;
     dispatch.instanceProc = reinterpret_cast<PFN_vkGetInstanceProcAddr>(dlsym(owner.library, "vkGetInstanceProcAddr"));
     if (!dispatch.instanceProc) return 2;
     VkApplicationInfo application { VK_STRUCTURE_TYPE_APPLICATION_INFO };
-    application.pApplicationName = "Myrica Skia Vulkan probe";
+    application.pApplicationName = "WebCore Scarlet Skia Vulkan";
     application.apiVersion = VK_API_VERSION_1_1;
     VkInstanceCreateInfo info { VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO };
     info.pApplicationInfo = &application;
@@ -202,6 +192,8 @@ int probe()
     dispatch.deviceProc = dispatch.instanceFunction<PFN_vkGetDeviceProcAddr>("vkGetDeviceProcAddr");
     VkQueue queue;
     dispatch.deviceFunction<PFN_vkGetDeviceQueue>("vkGetDeviceQueue")(dispatch.device, queueIndex, 0, &queue);
+    owner.queue = queue;
+    owner.queueIndex = queueIndex;
     skgpu::VulkanBackendContext backend;
     backend.fInstance = dispatch.instance; backend.fPhysicalDevice = physical; backend.fDevice = dispatch.device;
     backend.fQueue = queue; backend.fGraphicsQueueIndex = queueIndex; backend.fMaxAPIVersion = VK_API_VERSION_1_1;
@@ -225,51 +217,143 @@ int probe()
     options.fAvoidStencilBuffers = !stencil;
     owner.context = GrDirectContexts::MakeVulkan(backend, options);
     if (!owner.context) { std::fprintf(stderr, "SKIA_VULKAN_FAIL Ganesh context\n"); return 7; }
-    const auto imageInfo = SkImageInfo::Make(128, 96, kRGBA_8888_SkColorType, kPremul_SkAlphaType, SkColorSpace::MakeSRGB());
-    // Export a bound, untouched Vulkan image before Ganesh can submit it.
-    // Wrap the same physical image, so the GPU draw/readback exercises the
-    // SGFX sharing path rather than a separate CPU copy of an internal surface.
+    return 0;
+}
+struct ScarletSkiaVulkan::Surface::State {
+    std::shared_ptr<ScarletSkiaVulkan> owner;
+    sk_sp<SkSurface> surface;
+    VkImage image { };
+    skgpu::VulkanBackendMemory memory { };
+    int32_t exportedHandle { -1 };
+    ~State()
+    {
+        auto& device = *owner->m_state;
+        device.checkThread();
+        surface = nullptr;
+        // Finish commands referencing borrowed storage before freeing it.
+        if (device.context) {
+            device.context->flush();
+            device.context->submit(GrSyncCpu::kYes);
+        }
+        if (image) device.dispatch.deviceFunction<PFN_vkDestroyImage>("vkDestroyImage")(device.dispatch.device, image, nullptr);
+        if (memory) device.allocator->freeMemory(memory);
+        if (exportedHandle >= 0) close(exportedHandle);
+    }
+};
+ScarletSkiaVulkan::ScarletSkiaVulkan(std::unique_ptr<State>&& state) : m_state(std::move(state)) { }
+ScarletSkiaVulkan::~ScarletSkiaVulkan() = default;
+ScarletSkiaVulkan::Surface::Surface(std::unique_ptr<State>&& state) : m_state(std::move(state)) { }
+ScarletSkiaVulkan::Surface::~Surface() = default;
+std::shared_ptr<ScarletSkiaVulkan> ScarletSkiaVulkan::create()
+{
+    auto state = std::make_unique<State>();
+    if (auto status = initialize(*state)) {
+        std::fprintf(stderr, "SCARLET_SKIA_VULKAN_FAIL initialize=%d\n", status);
+        return nullptr;
+    }
+    return std::shared_ptr<ScarletSkiaVulkan>(new ScarletSkiaVulkan(std::move(state)));
+}
+GrDirectContext* ScarletSkiaVulkan::grContext() const
+{
+    m_state->checkThread();
+    return m_state->context.get();
+}
+SkSurface& ScarletSkiaVulkan::Surface::skSurface() const
+{
+    m_state->owner->m_state->checkThread();
+    return *m_state->surface;
+}
+int32_t ScarletSkiaVulkan::Surface::duplicateHandle() const
+{
+    m_state->owner->m_state->checkThread();
+    return dup(m_state->exportedHandle);
+}
+uint64_t ScarletSkiaVulkan::allocatedBytes() const
+{
+    m_state->checkThread();
+    return m_state->allocator->totalAllocatedAndUsedMemory().first;
+}
+bool ScarletSkiaVulkan::submit(Surface& surface)
+{
+    m_state->checkThread();
+    if (surface.m_state->owner.get() != this || m_state->context->abandoned()) return false;
+    m_state->context->flush(surface.m_state->surface.get());
+    return m_state->context->submit(GrSyncCpu::kYes) && !m_state->context->abandoned();
+}
+std::unique_ptr<ScarletSkiaVulkan::Surface> ScarletSkiaVulkan::createSurface(uint32_t width, uint32_t height, const SkSurfaceProps* properties)
+{
+    m_state->checkThread();
+    if (!width || !height || width > static_cast<uint32_t>(m_state->context->maxRenderTargetSize()) || height > static_cast<uint32_t>(m_state->context->maxRenderTargetSize()) || m_state->context->abandoned()) return nullptr;
+    auto state = std::make_unique<Surface::State>();
+    state->owner = shared_from_this();
+    auto& dispatch = m_state->dispatch;
     VkImageCreateInfo imageCreate { VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO };
     imageCreate.imageType = VK_IMAGE_TYPE_2D;
     imageCreate.format = VK_FORMAT_B8G8R8A8_UNORM;
-    imageCreate.extent = { 128, 96, 1 };
+    imageCreate.extent = { width, height, 1 };
     imageCreate.mipLevels = imageCreate.arrayLayers = 1;
     imageCreate.samples = VK_SAMPLE_COUNT_1_BIT;
     imageCreate.tiling = VK_IMAGE_TILING_OPTIMAL;
     imageCreate.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
     imageCreate.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-    if (dispatch.deviceFunction<PFN_vkCreateImage>("vkCreateImage")(dispatch.device, &imageCreate, nullptr, &owner.sharedImage) != VK_SUCCESS) return 11;
-    if (owner.allocator->allocateImageMemory(owner.sharedImage, 0, &owner.sharedMemory) != VK_SUCCESS) return 12;
+    if (dispatch.deviceFunction<PFN_vkCreateImage>("vkCreateImage")(dispatch.device, &imageCreate, nullptr, &state->image) != VK_SUCCESS) return nullptr;
+    if (m_state->allocator->allocateImageMemory(state->image, 0, &state->memory) != VK_SUCCESS) return nullptr;
     GrVkImageInfo wrapped;
-    owner.allocator->getAllocInfo(owner.sharedMemory, &wrapped.fAlloc);
-    if (dispatch.deviceFunction<PFN_vkBindImageMemory>("vkBindImageMemory")(dispatch.device, owner.sharedImage, wrapped.fAlloc.fMemory, wrapped.fAlloc.fOffset) != VK_SUCCESS) return 13;
-    if (dispatch.deviceFunction<PFN_vkQueueWaitIdle>("vkQueueWaitIdle")(queue) != VK_SUCCESS) return 14;
+    m_state->allocator->getAllocInfo(state->memory, &wrapped.fAlloc);
+    if (dispatch.deviceFunction<PFN_vkBindImageMemory>("vkBindImageMemory")(dispatch.device, state->image, wrapped.fAlloc.fMemory, wrapped.fAlloc.fOffset) != VK_SUCCESS) return nullptr;
+    if (dispatch.deviceFunction<PFN_vkQueueWaitIdle>("vkQueueWaitIdle")(m_state->queue) != VK_SUCCESS) return nullptr;
     using ExportImage = VkResult (*)(VkDevice, VkImage, int32_t*);
     auto exportImage = dispatch.deviceFunction<ExportImage>("vkGetImageScarletHandleSGFX");
-    if (!exportImage || exportImage(dispatch.device, owner.sharedImage, &owner.exportedHandle) != VK_SUCCESS || owner.exportedHandle < 0) return 15;
-    wrapped.fImage = owner.sharedImage;
+    if (!exportImage || exportImage(dispatch.device, state->image, &state->exportedHandle) != VK_SUCCESS || state->exportedHandle < 0) return nullptr;
+    wrapped.fImage = state->image;
     wrapped.fImageTiling = VK_IMAGE_TILING_OPTIMAL;
     wrapped.fImageLayout = VK_IMAGE_LAYOUT_UNDEFINED;
     wrapped.fFormat = imageCreate.format;
     wrapped.fImageUsageFlags = imageCreate.usage;
     wrapped.fSampleCount = 1;
     wrapped.fLevelCount = 1;
-    wrapped.fCurrentQueueFamily = queueIndex;
-    auto renderTarget = GrBackendRenderTargets::MakeVk(128, 96, wrapped);
-    owner.surface = SkSurfaces::WrapBackendRenderTarget(owner.context.get(), renderTarget, kTopLeft_GrSurfaceOrigin, kBGRA_8888_SkColorType, SkColorSpace::MakeSRGB(), nullptr);
-    if (!owner.surface) { std::fprintf(stderr, "SKIA_VULKAN_FAIL shared GPU surface\n"); return 8; }
-    owner.surface->getCanvas()->clear(SK_ColorWHITE);
+    wrapped.fCurrentQueueFamily = m_state->queueIndex;
+    auto renderTarget = GrBackendRenderTargets::MakeVk(width, height, wrapped);
+    state->surface = SkSurfaces::WrapBackendRenderTarget(m_state->context.get(), renderTarget, kTopLeft_GrSurfaceOrigin, kBGRA_8888_SkColorType, SkColorSpace::MakeSRGB(), properties);
+    if (!state->surface) { std::fprintf(stderr, "SKIA_VULKAN_FAIL shared GPU surface\n"); return nullptr; }
+    return std::unique_ptr<Surface>(new Surface(std::move(state)));
+}
+
+int probe()
+{
+    char scalar[kSkStrAppendScalar_MaxSize + 1];
+    auto* scalarEnd = SkStrAppendScalar(scalar, 1.25f);
+    *scalarEnd = '\0';
+    if (SkString(scalar) != SkString("1.25")) {
+        std::fprintf(stderr, "SKIA_VULKAN_FAIL scalar conversion\n");
+        return 17;
+    }
+    auto cpus = sysconf(_SC_NPROCESSORS_ONLN);
+    if (cpus <= 0) { std::fprintf(stderr, "SKIA_VULKAN_FAIL online CPU query\n"); return 16; }
+    std::fprintf(stderr, "SKIA_VULKAN_CPUS %ld\n", cpus);
+    auto owner = ScarletSkiaVulkan::create();
+    if (!owner) return 7;
+    auto surface = owner->createSurface(128, 96);
+    if (!surface) return 8;
+    auto retainedSurface = owner->createSurface(160, 112);
+    if (!retainedSurface) return 19;
+    retainedSurface->skSurface().getCanvas()->clear(SK_ColorGREEN);
+    if (!owner->submit(*retainedSurface)) return 20;
+    int32_t handle = surface->duplicateHandle();
+    if (handle < 0) return 15;
+    close(handle);
+    const auto imageInfo = SkImageInfo::Make(128, 96, kRGBA_8888_SkColorType, kPremul_SkAlphaType, SkColorSpace::MakeSRGB());
+    surface->skSurface().getCanvas()->clear(SK_ColorWHITE);
     SkPaint paint; paint.setColor(SK_ColorRED);
-    owner.surface->getCanvas()->drawRect(SkRect::MakeXYWH(16, 16, 32, 32), paint);
+    surface->skSurface().getCanvas()->drawRect(SkRect::MakeXYWH(16, 16, 32, 32), paint);
     paint.setColor(SK_ColorBLUE);
-    owner.surface->getCanvas()->drawRect(SkRect::MakeXYWH(64, 32, 32, 32), paint);
-    owner.context->flush(owner.surface.get());
-    if (!owner.context->submit(GrSyncCpu::kYes)) {
-        std::fprintf(stderr, "SKIA_VULKAN_FAIL draw submit abandoned=%d\n", owner.context->abandoned());
+    surface->skSurface().getCanvas()->drawRect(SkRect::MakeXYWH(64, 32, 32, 32), paint);
+    if (!owner->submit(*surface)) {
+        std::fprintf(stderr, "SKIA_VULKAN_FAIL draw submit abandoned=%d\n", owner->grContext()->abandoned());
         return 18;
     }
     std::vector<uint32_t> pixels(128 * 96);
-    if (!owner.surface->readPixels(imageInfo, pixels.data(), 128 * 4, 0, 0)) { std::fprintf(stderr, "SKIA_VULKAN_FAIL GPU readback abandoned=%d\n", owner.context->abandoned()); return 9; }
+    if (!surface->skSurface().readPixels(imageInfo, pixels.data(), 128 * 4, 0, 0)) { std::fprintf(stderr, "SKIA_VULKAN_FAIL GPU readback abandoned=%d\n", owner->grContext()->abandoned()); return 9; }
     // RGBA byte order, independent of Skia's native N32 order.
     auto* bytes = reinterpret_cast<const unsigned char*>(pixels.data());
     auto matches = [bytes](int x, int y, unsigned char r, unsigned char g, unsigned char b) {
@@ -279,12 +363,13 @@ int probe()
     if (!matches(0, 0, 255, 255, 255) || !matches(24, 24, 255, 0, 0) || !matches(72, 40, 0, 0, 255)) {
         std::fprintf(stderr, "SKIA_VULKAN_FAIL GPU draw pixel mismatch\n"); return 10;
     }
-    std::fprintf(stderr, "SKIA_VULKAN_PASS Ganesh rectangles on shared SGFX GPU image, handle=%d memory=%llu\n", owner.exportedHandle, static_cast<unsigned long long>(owner.allocator->totalAllocatedAndUsedMemory().first));
+    std::fprintf(stderr, "SKIA_VULKAN_PASS Ganesh rectangles on shared SGFX GPU image, handle=%d memory=%llu\n", handle, static_cast<unsigned long long>(owner->allocatedBytes()));
+    surface.reset();
+    if (!owner->submit(*retainedSurface)) return 21;
     return 0;
 }
 }
-
-extern "C" int scarlet_webview_vulkan_probe() { return probe(); }
+extern "C" int scarlet_webview_vulkan_probe() { return WebCore::probe(); }
 
 // Initialized C++ ELF TLS must be copied for every native thread. This also
 // checks that Rust's namespace header and C errno survive C++ TLS writes.
