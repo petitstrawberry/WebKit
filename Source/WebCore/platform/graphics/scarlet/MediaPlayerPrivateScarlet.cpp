@@ -120,6 +120,10 @@ void MediaPlayerPrivateScarlet::load(const URL& url, const LoadOptions&)
         cancelLoad();
         return;
     }
+    m_rate = player->requestedRate();
+    scarlet_media_session_set_rate(m_session, m_rate);
+    scarlet_media_session_set_volume(m_session, player->volume());
+    scarlet_media_session_set_muted(m_session, player->muted());
     setNetworkState(MediaPlayer::NetworkState::Loading);
     m_resource = player->mediaResourceLoader()->requestResource(ResourceRequest { URL { url } }, PlatformMediaResourceLoader::DisallowCaching);
     if (!m_resource) {
@@ -638,6 +642,12 @@ void MediaPlayerPrivateScarlet::load(const URL&, const LoadOptions&, MediaSource
     if (!m_session) {
         fail(MediaPlayer::NetworkState::DecodeError);
         return;
+    }
+    if (auto player = m_player.get()) {
+        m_rate = player->requestedRate();
+        scarlet_media_session_set_rate(m_session, m_rate);
+        scarlet_media_session_set_volume(m_session, player->volume());
+        scarlet_media_session_set_muted(m_session, player->muted());
     }
     m_mediaSource = MediaSourcePrivateScarlet::open(client, *this);
     // SourceBuffer accepts JavaScript-visible bytes, as for the AVFoundation
