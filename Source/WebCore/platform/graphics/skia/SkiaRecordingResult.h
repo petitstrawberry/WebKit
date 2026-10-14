@@ -29,7 +29,9 @@
 #include "SkiaGpuFence.h"
 #include "IntRect.h"
 #include "RenderingMode.h"
+#if USE(COORDINATED_GRAPHICS)
 #include "SkiaGPUAtlas.h"
+#endif
 #include "SkiaImageAtlasLayout.h"
 
 WTF_IGNORE_WARNINGS_IN_THIRD_PARTY_CODE_BEGIN
@@ -77,13 +79,17 @@ public:
     unsigned imageSetFingerprint() const { return m_imageSetFingerprint; }
 
     // GPU atlases prepared on main thread for worker threads to rewrap.
+#if USE(COORDINATED_GRAPHICS)
     void setGPUAtlases(Vector<Ref<SkiaGPUAtlas>>&& atlases) { m_gpuAtlases = WTF::move(atlases); }
+#endif
 
     // Check if GPU atlases are ready.
     bool hasGPUAtlases() const { return !m_gpuAtlases.isEmpty(); }
 
     // Get prepared GPU atlases (for worker threads to rewrap).
+#if USE(COORDINATED_GRAPHICS)
     const Vector<Ref<SkiaGPUAtlas>>& gpuAtlases() const LIFETIME_BOUND { return m_gpuAtlases; }
+#endif
 
 private:
     SkiaRecordingResult(sk_sp<SkPicture>&&, SkiaRecordingData&&, const IntRect& recordRect, RenderingMode, bool contentsOpaque, float contentsScale);
@@ -95,7 +101,9 @@ private:
 #endif
     Vector<Ref<SkiaImageAtlasLayout>> m_atlasLayouts;
     unsigned m_imageSetFingerprint { 0 };
+#if USE(COORDINATED_GRAPHICS)
     Vector<Ref<SkiaGPUAtlas>> m_gpuAtlases;
+#endif
     IntRect m_recordRect;
     RenderingMode m_renderingMode { RenderingMode::Unaccelerated };
     bool m_contentsOpaque : 1 { true };

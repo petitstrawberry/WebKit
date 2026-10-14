@@ -28,6 +28,8 @@
 #include "PlatformDisplay.h"
 #include "ScarletSkiaVulkan.h"
 #include <skia/core/SkCanvas.h>
+#include <skia/core/SkSurface.h>
+#include <skia/core/SkColorSpace.h>
 #else
 #include "GraphicsContextCairo.h"
 #endif
@@ -695,6 +697,28 @@ extern "C" int32_t scarlet_webview_release_gpu_frame(ScarletWebView* view, uint6
     for (auto& slot : view->gpuSlots) {
         if (slot.lease != generation) continue;
         slot.lease = 0;
+        return SWV_OK;
+    }
+    return SWV_STALE_REQUEST;
+#else
+    return SWV_UNSUPPORTED;
+#endif
+}
+
+extern "C" int32_t scarlet_webview_gpu_frame_readback(ScarletWebView* view, uint64_t generation, SWVPixels* out)
+{
+    auto status = viewStatus(view);
+    if (status != SWV_OK) return status;
+    if (!out || !generation) return SWV_INVALID_ARGUMENT;
+    *out = { };
+#if USE(SKIA)
+    for (const auto& slot : view->gpuSlots) {
+        if (slot.lease != generation) continue;
+        auto info = SkImageInfo::Make(slot.width, slot.height, kBGRA_8888_SkColorType, kPremul_SkAlphaType, SkColorSpace::MakeSRGB());
+        auto stride = info.minRowBytes();
+        view->publishedPixels.resize(info.computeMinByteSize());
+        if (!slot.surface->skSurface().readPixels(info, view->publishedPixels.data(), stride, 0, 0)) return SWV_FAILED;
+        *out = { view->publishedPixels.data(), view->publishedPixels.size(), slot.width, slot.height, static_cast<uint32_t>(stride), 1, generation };
         return SWV_OK;
     }
     return SWV_STALE_REQUEST;

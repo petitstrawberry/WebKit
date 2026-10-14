@@ -116,6 +116,9 @@ typedef struct { int32_t handle; uint32_t width, height, format; uint64_t genera
 int32_t scarlet_webview_gpu_frame_capacity(ScarletWebView*, uint32_t*);
 int32_t scarlet_webview_gpu_frame(ScarletWebView*, SWVGpuFrame*);
 int32_t scarlet_webview_release_gpu_frame(ScarletWebView*, uint64_t generation);
+/* Diagnostic readback of one leased image for renderer contract tests.
+ * Browser presentation never calls this. The returned pixels are view-owned. */
+int32_t scarlet_webview_gpu_frame_readback(ScarletWebView*, uint64_t generation, SWVPixels*);
 int32_t scarlet_webview_state(ScarletWebView*, SWVState*);
 int32_t scarlet_webview_mouse(ScarletWebView*, const SWVMouseEvent*, uint32_t* handled);
 int32_t scarlet_webview_wheel(ScarletWebView*, const SWVWheelEvent*, uint32_t* handled);
