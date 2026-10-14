@@ -24,12 +24,15 @@ if (TARGET bmalloc)
     list(APPEND _scarlet_engine_targets bmalloc)
 endif ()
 set(_scarlet_dependency_targets
-    Cairo::Cairo Fontconfig::Fontconfig Freetype::Freetype
+    Fontconfig::Fontconfig Freetype::Freetype
     HarfBuzz::HarfBuzz HarfBuzz::ICU ICU::i18n ICU::uc ICU::data
     JPEG::JPEG PNG::PNG ZLIB::ZLIB WebP::libwebp WebP::demux
     LibXml2::LibXml2 SQLite3::SQLite3 OpenSSL::SSL OpenSSL::Crypto
     CURL::libcurl LibPSL::LibPSL
 )
+if (USE_CAIRO)
+    list(PREPEND _scarlet_dependency_targets Cairo::Cairo)
+endif ()
 if (USE_WOFF2)
     list(APPEND _scarlet_dependency_targets WOFF2::common WOFF2::dec Brotli::common Brotli::dec)
 endif ()
@@ -88,15 +91,17 @@ endforeach ()
 
 # These dependencies have no upstream imported target in this configuration.
 # NO_DEFAULT_PATH is deliberate: a host pixman/expat archive cannot enter.
-find_library(_scarlet_pixman NAMES pixman-1
-    PATHS ${SCARLET_NATIVE_LIBRARY_ROOTS} PATH_SUFFIXES lib NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH REQUIRED)
 find_library(_scarlet_expat NAMES expat
     PATHS ${SCARLET_NATIVE_LIBRARY_ROOTS} PATH_SUFFIXES lib NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH REQUIRED)
 set(_scarlet_private_archives
-    "${_scarlet_pixman}"
     "${_scarlet_expat}"
     "${SCARLET_CXX_RUNTIME_SUPPORT_LIBRARY}"
 )
+if (USE_CAIRO)
+    find_library(_scarlet_pixman NAMES pixman-1
+        PATHS ${SCARLET_NATIVE_LIBRARY_ROOTS} PATH_SUFFIXES lib NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH REQUIRED)
+    list(PREPEND _scarlet_private_archives "${_scarlet_pixman}")
+endif ()
 # Rust embeddings supply this C ABI from their own native Rust dependency.
 # A standalone renderer still supplies the actual native bridge archive.
 if (SCARLET_NATIVE_MEMORY_LIBRARY)
