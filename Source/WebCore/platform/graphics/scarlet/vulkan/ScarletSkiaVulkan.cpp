@@ -4,6 +4,7 @@
 #include <skia/core/SkPaint.h>
 #include <skia/core/SkSurface.h>
 #include <skia/gpu/ganesh/GrDirectContext.h>
+#include <skia/gpu/ganesh/GrContextOptions.h>
 #include <skia/gpu/ganesh/SkSurfaceGanesh.h>
 #include <skia/gpu/ganesh/vk/GrVkDirectContext.h>
 #include <skia/gpu/vk/VulkanBackendContext.h>
@@ -191,7 +192,15 @@ int probe()
     backend.fVkExtensions = &extensions;
     owner.allocator = sk_make_sp<Allocator>(dispatch, physical);
     backend.fMemoryAllocator = owner.allocator;
-    owner.context = GrDirectContexts::MakeVulkan(backend);
+    GrContextOptions options;
+    bool stencil = false;
+    for (auto format : { VK_FORMAT_S8_UINT, VK_FORMAT_D24_UNORM_S8_UINT, VK_FORMAT_D32_SFLOAT_S8_UINT }) {
+        VkFormatProperties properties { };
+        dispatch.instanceFunction<PFN_vkGetPhysicalDeviceFormatProperties>("vkGetPhysicalDeviceFormatProperties")(physical, format, &properties);
+        stencil |= properties.optimalTilingFeatures & VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT;
+    }
+    options.fAvoidStencilBuffers = !stencil;
+    owner.context = GrDirectContexts::MakeVulkan(backend, options);
     if (!owner.context) { std::fprintf(stderr, "SKIA_VULKAN_FAIL Ganesh context\n"); return 7; }
     const auto imageInfo = SkImageInfo::Make(128, 96, kRGBA_8888_SkColorType, kPremul_SkAlphaType, SkColorSpace::MakeSRGB());
     owner.surface = SkSurfaces::RenderTarget(owner.context.get(), skgpu::Budgeted::kNo, imageInfo);
@@ -219,3 +228,9 @@ int probe()
 }
 
 extern "C" int scarlet_webview_vulkan_probe() { return probe(); }
+
+// Initialized C++ ELF TLS must be copied for every native thread. This also
+// checks that Rust's namespace header and C errno survive C++ TLS writes.
+static thread_local uint64_t tlsCounter = 17;
+extern "C" uint64_t scarlet_webview_tls_value() { return tlsCounter; }
+extern "C" uint64_t scarlet_webview_tls_increment() { return ++tlsCounter; }
