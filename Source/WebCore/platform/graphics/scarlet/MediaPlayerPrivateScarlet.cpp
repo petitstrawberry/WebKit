@@ -212,6 +212,7 @@ void MediaPlayerPrivateScarlet::cancelLoad()
     m_packetBytes = 0;
     m_tracks.clear();
     m_buffered.clear();
+    m_seekable.clear();
     m_image = nullptr;
     m_size = { };
     m_status = { };
@@ -567,6 +568,12 @@ const PlatformTimeRanges& MediaPlayerPrivateScarlet::buffered() const
 }
 const PlatformTimeRanges& MediaPlayerPrivateScarlet::seekable() const
 {
+#if ENABLE(MEDIA_SOURCE)
+    if (m_mediaSource) {
+        m_seekable = m_mediaSource->seekable();
+        return m_seekable;
+    }
+#endif
     return buffered();
 }
 
@@ -633,6 +640,9 @@ void MediaPlayerPrivateScarlet::load(const URL&, const LoadOptions&, MediaSource
         return;
     }
     m_mediaSource = MediaSourcePrivateScarlet::open(client, *this);
+    // SourceBuffer accepts JavaScript-visible bytes, as for the AVFoundation
+    // MSE engine. Network-origin checks happened before JS could read them.
+    m_passedCors = true;
     setNetworkState(MediaPlayer::NetworkState::Loading);
     wake();
 }

@@ -113,6 +113,7 @@ private:
     ScarletMediaStatus m_status { };
     FloatSize m_size;
     mutable PlatformTimeRanges m_buffered;
+    mutable PlatformTimeRanges m_seekable;
     MediaPlayer::NetworkState m_networkState { MediaPlayer::NetworkState::Empty };
     double m_rate { 1 };
     bool m_visible { true };
