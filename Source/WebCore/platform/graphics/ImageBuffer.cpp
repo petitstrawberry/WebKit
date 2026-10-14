@@ -52,7 +52,6 @@
 #endif
 
 #if USE(SKIA)
-#include "GLContext.h"
 #include "ImageBufferSkiaAcceleratedBackend.h"
 #include "PlatformDisplay.h"
 #include "SkiaSerializedImageBuffer.h"
