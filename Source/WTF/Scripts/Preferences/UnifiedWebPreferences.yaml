@@ -2759,7 +2759,7 @@ HardwareAccelerationEnabled:
   status: internal
   humanReadableName: "Hardware acceleration"
   humanReadableDescription: "Enable hardware acceleration"
-  condition: PLATFORM(GTK) || ENABLE(WPE_PLATFORM)
+  condition: PLATFORM(GTK) || ENABLE(WPE_PLATFORM) || PLATFORM(SCARLET)
   defaultValue: true
 
 HeadingOffsetEnabled:
