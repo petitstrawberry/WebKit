@@ -49,7 +49,7 @@ public:
     Ref<MediaTimePromise> seekToTarget(const SeekTarget&) final;
     void setRateDouble(double) final;
     double rate() const final { return m_rate; }
-    bool paused() const final { return m_status.paused; }
+    bool paused() const final { return statusSnapshot().paused; }
     void setVolumeDouble(double) final;
     void setMuted(bool) final;
     MediaPlayer::NetworkState networkState() const final { return m_networkState; }

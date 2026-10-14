@@ -106,6 +106,10 @@ MediaPlayerPrivateScarlet::MediaPlayerPrivateScarlet(MediaPlayer& player)
 }
 MediaPlayerPrivateScarlet::~MediaPlayerPrivateScarlet()
 {
+    // MediaPlayer clears or replaces m_private before releasing this engine.
+    // Cleanup must not notify a live player whose active engine is now null
+    // or a different instance. Explicit cancelLoad still reports Empty.
+    m_player = nullptr;
     cancelLoad();
 }
 

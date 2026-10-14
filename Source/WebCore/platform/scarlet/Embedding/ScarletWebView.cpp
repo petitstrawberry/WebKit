@@ -45,6 +45,7 @@
 #include "LocalFrameInlines.h"
 #include "LocalFrameView.h"
 #include "Page.h"
+#include "PageIdentifier.h"
 #include "PageConfiguration.h"
 #include "PlatformKeyboardEvent.h"
 #include "PlatformMouseEvent.h"
@@ -451,7 +452,7 @@ extern "C" int32_t scarlet_webview_create(const SWVConfiguration* configuration,
     view->height = configuration->height;
     view->scale = configuration->device_scale_factor;
     screenForView(*view);
-    auto pageConfiguration = pageConfigurationWithEmptyClients(std::nullopt, PAL::SessionID::defaultSessionID());
+    auto pageConfiguration = pageConfigurationWithEmptyClients(PageIdentifier::generate(), PAL::SessionID::defaultSessionID());
     pageConfiguration.loadsSubresources = true;
     pageConfiguration.cookieJar = createScarletCookieJar();
     pageConfiguration.databaseProvider = createScarletDatabaseProvider();
