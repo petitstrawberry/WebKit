@@ -5,6 +5,11 @@
 #include <skia/core/SkPaint.h>
 #include <skia/core/SkSurface.h>
 #include <skia/core/SkString.h>
+#include <skia/core/SkYUVAPixmaps.h>
+#include <skia/gpu/ganesh/SkImageGanesh.h>
+#include <array>
+#include <algorithm>
+#include <cstring>
 #include <skia/gpu/ganesh/GrDirectContext.h>
 #include <skia/gpu/ganesh/GrContextOptions.h>
 #include <skia/gpu/ganesh/SkSurfaceGanesh.h>
@@ -319,6 +324,115 @@ std::unique_ptr<ScarletSkiaVulkan::Surface> ScarletSkiaVulkan::createSurface(uin
     return std::unique_ptr<Surface>(new Surface(std::move(state)));
 }
 
+// Exercise decoded I420 planes as GPU textures, never a CPU-converted RGB
+// frame. The scalar reference is an independent BT.601/709 matrix oracle for
+// diagnostic readback only; real presentation samples Ganesh's YUV textures.
+static int probeI420GPU(ScarletSkiaVulkan& owner)
+{
+    constexpr int width = 8;
+    constexpr int height = 8;
+    auto surface = owner.createSurface(width, height);
+    if (!surface) {
+        std::fprintf(stderr, "SKIA_VULKAN_FAIL I420 shared surface\n");
+        return 40;
+    }
+    struct Conversion {
+        SkYUVColorSpace space;
+        const char* name;
+        double kr;
+        double kb;
+        bool limited;
+    };
+    const Conversion conversions[] {
+        { kJPEG_Full_SkYUVColorSpace, "BT601-full", 0.2990, 0.1140, false },
+        { kRec601_Limited_SkYUVColorSpace, "BT601-limited", 0.2990, 0.1140, true },
+        { kRec709_Full_SkYUVColorSpace, "BT709-full", 0.2126, 0.0722, false },
+        { kRec709_Limited_SkYUVColorSpace, "BT709-limited", 0.2126, 0.0722, true },
+    };
+    const auto readInfo = SkImageInfo::Make(width, height, kRGBA_8888_SkColorType,
+        kPremul_SkAlphaType, SkColorSpace::MakeSRGB());
+    std::array<unsigned char, width * height * 4> readback;
+    for (const auto& conversion : conversions) {
+        // Black/white/gray, opposed chroma, and clipped out-of-gamut samples.
+        // Different values on U and V expose plane-order mistakes. Padding
+        // guards expose use of plane width in place of the decoder row stride.
+        const std::array<int, 3> samples[] {
+            { conversion.limited ? 16 : 0, 128, 128 },
+            { conversion.limited ? 235 : 255, 128, 128 },
+            { 128, 128, 128 },
+            { 96, 64, 192 },
+            { 160, 192, 64 },
+            { 16, 16, 240 },
+            { 235, 240, 16 },
+        };
+        int fixture = 0;
+        for (const auto& sample : samples) {
+            const SkYUVAInfo info(SkISize::Make(width, height), SkYUVAInfo::PlaneConfig::kY_U_V,
+                SkYUVAInfo::Subsampling::k420, conversion.space);
+            const size_t rowBytes[SkYUVAPixmaps::kMaxPlanes] { 16, 8, 8, 0 };
+            auto planes = SkYUVAPixmaps::Allocate(SkYUVAPixmapInfo(info,
+                SkYUVAPixmapInfo::DataType::kUnorm8, rowBytes));
+            if (!planes.isValid() || planes.numPlanes() != 3) {
+                std::fprintf(stderr, "SKIA_VULKAN_FAIL I420 plane allocation space=%s fixture=%d\n", conversion.name, fixture);
+                return 41;
+            }
+            for (int i = 0; i < 3; ++i) {
+                const auto& plane = planes.plane(i);
+                std::memset(plane.writable_addr(), 0xCD, plane.computeByteSize());
+                for (int row = 0; row < plane.height(); ++row)
+                    std::memset(static_cast<unsigned char*>(plane.writable_addr()) + row * plane.rowBytes(), sample[i], plane.width());
+            }
+            auto image = SkImages::TextureFromYUVAPixmaps(owner.grContext(), planes,
+                skgpu::Mipmapped::kNo, false, SkColorSpace::MakeSRGB());
+            if (!image || !image->isTextureBacked()) {
+                std::fprintf(stderr, "SKIA_VULKAN_FAIL I420 GPU texture creation space=%s fixture=%d abandoned=%d\n",
+                    conversion.name, fixture, owner.grContext()->abandoned());
+                return 42;
+            }
+            auto* canvas = surface->skSurface().getCanvas();
+            canvas->clear(SK_ColorMAGENTA);
+            SkPaint paint;
+            paint.setBlendMode(SkBlendMode::kSrc);
+            canvas->drawImage(image, 0, 0, SkSamplingOptions(SkFilterMode::kNearest), &paint);
+            if (!owner.submit(*surface)) {
+                std::fprintf(stderr, "SKIA_VULKAN_FAIL I420 GPU draw submit space=%s fixture=%d abandoned=%d\n",
+                    conversion.name, fixture, owner.grContext()->abandoned());
+                return 43;
+            }
+            if (!surface->skSurface().readPixels(readInfo, readback.data(), width * 4, 0, 0)) {
+                std::fprintf(stderr, "SKIA_VULKAN_FAIL I420 GPU readback space=%s fixture=%d\n", conversion.name, fixture);
+                return 44;
+            }
+            const double y = (sample[0] - (conversion.limited ? 16.0 : 0.0)) / (conversion.limited ? 219.0 : 255.0);
+            const double u = (sample[1] - 128.0) / (conversion.limited ? 224.0 : 255.0);
+            const double v = (sample[2] - 128.0) / (conversion.limited ? 224.0 : 255.0);
+            const double kg = 1.0 - conversion.kr - conversion.kb;
+            auto quantize = [](double value) { return static_cast<int>(std::clamp(value, 0.0, 1.0) * 255.0 + 0.5); };
+            const int expected[] {
+                quantize(y + 2.0 * (1.0 - conversion.kr) * v),
+                quantize(y - 2.0 * conversion.kb * (1.0 - conversion.kb) / kg * u - 2.0 * conversion.kr * (1.0 - conversion.kr) / kg * v),
+                quantize(y + 2.0 * (1.0 - conversion.kb) * u),
+            };
+            // Two 8-bit levels cover GPU float/half matrix quantization and
+            // UNORM rounding; range/plane/matrix mistakes are much larger.
+            for (int pixel = 0; pixel < width * height; ++pixel) {
+                auto* actual = readback.data() + pixel * 4;
+                if (std::abs(actual[0] - expected[0]) > 2 || std::abs(actual[1] - expected[1]) > 2
+                    || std::abs(actual[2] - expected[2]) > 2 || actual[3] != 255) {
+                    std::fprintf(stderr, "SKIA_VULKAN_FAIL I420 GPU color space=%s fixture=%d pixel=%d yuv=%d,%d,%d expected=%d,%d,%d,255 actual=%d,%d,%d,%d\n",
+                        conversion.name, fixture, pixel, sample[0], sample[1], sample[2],
+                        expected[0], expected[1], expected[2], actual[0], actual[1], actual[2], actual[3]);
+                    return 45;
+                }
+            }
+            ++fixture;
+        }
+        std::fprintf(stderr, "SKIA_VULKAN_PASS I420 GPU YUV textures space=%s frames=%d checked_pixels=%d padded_planes=yes cpu-rgb-conversion=none\n",
+            conversion.name, fixture, fixture * width * height);
+    }
+    return 0;
+}
+
 int probe()
 {
     char scalar[kSkStrAppendScalar_MaxSize + 1];
@@ -366,7 +480,7 @@ int probe()
     std::fprintf(stderr, "SKIA_VULKAN_PASS Ganesh rectangles on shared SGFX GPU image, handle=%d memory=%llu\n", handle, static_cast<unsigned long long>(owner->allocatedBytes()));
     surface.reset();
     if (!owner->submit(*retainedSurface)) return 21;
-    return 0;
+    return probeI420GPU(*owner);
 }
 }
 extern "C" int scarlet_webview_vulkan_probe() { return WebCore::probe(); }
