@@ -22,6 +22,7 @@
 
 #include <fontconfig/fontconfig.h>
 #include <unistd.h>
+#include <strings.h>
 
 namespace {
 

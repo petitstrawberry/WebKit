@@ -21,6 +21,19 @@
 
 template <typename RoundtripType, int kFullPrecision>
 static std::string to_string_impl(RoundtripType value) {
+#if defined(__scarlet__)
+    // Scarlet's C runtime has a fixed C numeric locale. Keep the same short
+    // representation and roundtrip fallback without requiring C++ locales.
+    char buffer[64];
+    std::snprintf(buffer, sizeof(buffer), "%.*g", 7, static_cast<double>(value));
+    auto roundtripped = std::strtod(buffer, nullptr);
+    if (value != static_cast<RoundtripType>(roundtripped) && std::isfinite(value)) {
+        std::snprintf(buffer, sizeof(buffer), "%.*g", kFullPrecision, static_cast<double>(value));
+        SkASSERTF(value == static_cast<RoundtripType>(std::strtod(buffer, nullptr)),
+                  "%.17g -> %s", static_cast<double>(value), buffer);
+    }
+    std::string text(buffer);
+#else
     std::stringstream buffer;
     buffer.imbue(std::locale::classic());
     buffer.precision(7);
@@ -38,6 +51,8 @@ static std::string to_string_impl(RoundtripType value) {
         SkASSERTF((buffer >> roundtripped, value == (RoundtripType)roundtripped),
                   "%.17g -> %s -> %.17g", value, text.c_str(), roundtripped);
     }
+
+#endif
 
     // We need to emit a decimal point to distinguish floats from ints.
     if (!skstd::contains(text, '.') && !skstd::contains(text, 'e')) {
@@ -57,10 +72,19 @@ std::string skstd::to_string(double value) {
 
 bool SkSL::stod(std::string_view s, SKSL_FLOAT* value) {
     std::string str(s.data(), s.size());
+#if defined(__scarlet__)
+    char* end = nullptr;
+    errno = 0;
+    auto parsed = std::strtod(str.c_str(), &end);
+    if (end == str.c_str() || errno == ERANGE || !std::isfinite(parsed)) return false;
+    *value = parsed;
+    return true;
+#else
     std::stringstream buffer(str);
     buffer.imbue(std::locale::classic());
     buffer >> *value;
     return !buffer.fail() && std::isfinite(*value);
+#endif
 }
 
 bool SkSL::stoi(std::string_view s, SKSL_INT* value) {

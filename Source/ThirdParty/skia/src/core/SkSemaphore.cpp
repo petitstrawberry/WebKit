@@ -40,6 +40,30 @@
         }
         void wait() { WaitForSingleObject(fSemaphore, INFINITE/*timeout in ms*/); }
     };
+#elif defined(__scarlet__)
+    #include <condition_variable>
+    #include <mutex>
+    // Native libc++ uses Scarlet's real pthread mutex/condition primitives.
+    // Retain posted tokens when a signal precedes the first OS wait.
+    struct SkSemaphore::OSSemaphore {
+        std::mutex mutex;
+        std::condition_variable ready;
+        size_t tokens = 0;
+
+        void signal(int n) {
+            if (n <= 0) return;
+            {
+                std::lock_guard lock(mutex);
+                tokens += static_cast<size_t>(n);
+            }
+            ready.notify_all();
+        }
+        void wait() {
+            std::unique_lock lock(mutex);
+            ready.wait(lock, [this] { return tokens != 0; });
+            --tokens;
+        }
+    };
 #else
     // It's important we test for Mach before this.  This code will compile but not work there.
     #include <errno.h>

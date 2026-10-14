@@ -14,8 +14,8 @@
 #include "src/sksl/SkSLString.h"
 
 #include <cstddef>
-#include <iomanip>
-#include <sstream>
+#include <cinttypes>
+#include <cstdio>
 
 using namespace skia_private;
 
@@ -256,22 +256,16 @@ void VisitLineByLine(const std::string& text,
 }
 
 std::string SpirvAsHexStream(SkSpan<const uint32_t> spirv) {
-    std::ostringstream result;
-    result << "Paste the following SPIR-V binary in https://www.khronos.org/spir/visualizer/\n";
-    result << "      or pass to `spirv-dis` (optionally with `--comment --nested-indent`)\n";
-
+    std::string result = "Paste the following SPIR-V binary in https://www.khronos.org/spir/visualizer/\n"
+                         "      or pass to `spirv-dis` (optionally with `--comment --nested-indent`)\n";
     constexpr size_t kIndicesPerRow = 10;
-    size_t rowOffset = 0;
-    for (size_t index = 0; index < spirv.size(); ++index, ++rowOffset) {
-        if (rowOffset == kIndicesPerRow) {
-            result << "\n";
-            rowOffset = 0;
-        }
-        result << "0x" << std::uppercase << std::setfill('0') << std::setw(8) << std::hex
-               << spirv[index] << ",";
+    for (size_t index = 0; index < spirv.size(); ++index) {
+        if (index && index % kIndicesPerRow == 0) result += '\n';
+        char word[12];
+        std::snprintf(word, sizeof(word), "0x%08" PRIX32 ",", spirv[index]);
+        result += word;
     }
-
-    return result.str();
+    return result;
 }
 
 std::string BuildShaderErrorMessage(const char* shader, const char* errors) {

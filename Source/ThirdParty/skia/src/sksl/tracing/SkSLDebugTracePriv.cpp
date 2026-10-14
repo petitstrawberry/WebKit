@@ -12,7 +12,6 @@
 
 #include <cstdio>
 #include <cstring>
-#include <sstream>
 #include <string>
 
 namespace SkSL {
@@ -84,10 +83,12 @@ void DebugTracePriv::setTraceCoord(const SkIPoint& coord) {
 
 void DebugTracePriv::setSource(const std::string& source) {
     fSource.clear();
-    std::stringstream stream{source};
-    while (stream.good()) {
-        fSource.push_back({});
-        std::getline(stream, fSource.back(), '\n');
+    size_t start = 0;
+    for (;;) {
+        size_t end = source.find('\n', start);
+        fSource.push_back(source.substr(start, end == std::string::npos ? end : end - start));
+        if (end == std::string::npos) break;
+        start = end + 1;
     }
 }
 

@@ -43,7 +43,6 @@
 #include "src/sksl/ir/SkSLVariableReference.h"
 
 #include <algorithm>
-#include <locale>
 #include <optional>
 #include <string>
 #include <tuple>
@@ -165,7 +164,7 @@ static bool check_name(const SkString& name) {
         return false;
     }
     for (size_t i = 0; i < name.size(); ++i) {
-        if (name[i] != '_' && !std::isalnum(name[i], std::locale::classic())) {
+        if (name[i] != '_' && !((name[i] >= 'a' && name[i] <= 'z') || (name[i] >= 'A' && name[i] <= 'Z') || (name[i] >= '0' && name[i] <= '9'))) {
             return false;
         }
     }
