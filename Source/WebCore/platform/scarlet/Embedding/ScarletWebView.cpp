@@ -202,8 +202,10 @@ int32_t paint(ScarletWebView& view)
 
     auto size = cssSize(view);
     IntRect damage { IntPoint { }, size };
-    if (!USE(SKIA) && view.surface && !view.loadState.fullPaint && !view.loadState.dirtyRect.isEmpty())
+#if !USE(SKIA)
+    if (view.surface && !view.loadState.fullPaint && !view.loadState.dirtyRect.isEmpty())
         damage.intersect(view.loadState.dirtyRect);
+#endif
     view.loadState.needsPaint = false;
     view.loadState.fullPaint = false;
     view.loadState.dirtyRect = { };
