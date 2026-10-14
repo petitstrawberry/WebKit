@@ -144,6 +144,9 @@ public:
 
 int probe()
 {
+    auto cpus = sysconf(_SC_NPROCESSORS_ONLN);
+    if (cpus <= 0) { std::fprintf(stderr, "SKIA_VULKAN_FAIL online CPU query\n"); return 16; }
+    std::fprintf(stderr, "SKIA_VULKAN_CPUS %ld\n", cpus);
     Context owner;
     owner.library = dlopen("/lib/libvulkan.so.1", RTLD_NOW | RTLD_GLOBAL);
     if (!owner.library) { std::fprintf(stderr, "SKIA_VULKAN_FAIL loader: %s\n", dlerror()); return 1; }
