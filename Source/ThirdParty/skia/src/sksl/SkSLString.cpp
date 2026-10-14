@@ -10,6 +10,7 @@
 #include "src/sksl/SkSLString.h"
 
 #include <cerrno>
+#include <charconv>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -22,13 +23,19 @@
 template <typename RoundtripType, int kFullPrecision>
 static std::string to_string_impl(RoundtripType value) {
 #if defined(__scarlet__)
-    // Scarlet's C runtime has a fixed C numeric locale. Keep the same short
-    // representation and roundtrip fallback without requiring C++ locales.
+    // Locale-independent conversion, including the short representation and
+    // full-precision roundtrip fallback. No C printf float extension is needed.
     char buffer[64];
-    std::snprintf(buffer, sizeof(buffer), "%.*g", 7, static_cast<double>(value));
+    auto format = [&](int precision) {
+        auto result = std::to_chars(buffer, buffer + sizeof(buffer) - 1, value,
+                                    std::chars_format::general, precision);
+        if (result.ec != std::errc{}) SkUNREACHABLE;
+        *result.ptr = '\0';
+    };
+    format(7);
     auto roundtripped = std::strtod(buffer, nullptr);
     if (value != static_cast<RoundtripType>(roundtripped) && std::isfinite(value)) {
-        std::snprintf(buffer, sizeof(buffer), "%.*g", kFullPrecision, static_cast<double>(value));
+        format(kFullPrecision);
         SkASSERTF(value == static_cast<RoundtripType>(std::strtod(buffer, nullptr)),
                   "%.17g -> %s", static_cast<double>(value), buffer);
     }
