@@ -119,6 +119,8 @@ private:
     bool m_passedCors { false };
     bool m_inputFinished { false };
     bool m_endSubmitted { false };
+    bool m_demuxEnded { false };
+    bool m_replayPending { false };
     bool m_seekReadyForCompletion { false };
     mutable bool m_loadingProgress { false };
 };

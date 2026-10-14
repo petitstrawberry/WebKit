@@ -72,6 +72,8 @@ Ref<MediaPromise> SourceBufferPrivateScarlet::appendInternal(Ref<SharedBuffer>&&
     if (m_appendPromise)
         return MediaPromise::createAndReject(PlatformMediaError::InvalidState);
     m_appendPromise.emplace(PlatformMediaError::BufferRemoved);
+    if (auto parent = m_parent.get(); parent && !parent->isEnded())
+        m_endOfStream = false;
     m_appendData = WTF::move(bytes);
     m_appendOffset = 0;
     m_outstandingAppends = 0;
@@ -220,11 +222,12 @@ void SourceBufferPrivateScarlet::flush(TrackID identifier)
     if (auto nativePlayer = player())
         nativePlayer->flushTrack(identifier);
 }
-void SourceBufferPrivateScarlet::enqueueSample(Ref<MediaSample>&& sample, TrackID)
+void SourceBufferPrivateScarlet::enqueueSample(Ref<MediaSample>&& sample, TrackID identifier)
 {
     auto nativePlayer = player();
     if (!nativePlayer || !is<MediaSampleScarlet>(sample))
         return;
+    m_fullyEnqueuedTracks.remove(identifier);
     Ref packet = downcast<MediaSampleScarlet>(WTF::move(sample));
     if (!nativePlayer->enqueueSample(packet))
         m_deferredSample = WTF::move(packet);
@@ -245,8 +248,12 @@ void SourceBufferPrivateScarlet::notifyDecodersReady()
     auto nativePlayer = player();
     if (!nativePlayer)
         return;
-    if (m_deferredSample && nativePlayer->enqueueSample(*m_deferredSample))
+    if (m_deferredSample && nativePlayer->enqueueSample(*m_deferredSample)) {
+        auto identifier = m_deferredSample->trackID();
         m_deferredSample = nullptr;
+        if (m_endOfStream && m_fullyEnqueuedTracks.contains(identifier))
+            nativePlayer->endTrack(identifier);
+    }
     if (m_deferredSample)
         return;
     Vector<TrackID> ready;
@@ -259,17 +266,24 @@ void SourceBufferPrivateScarlet::notifyDecodersReady()
         provideMediaData(identifier);
     }
 }
-void SourceBufferPrivateScarlet::allSamplesInTrackEnqueued(TrackID)
+void SourceBufferPrivateScarlet::allSamplesInTrackEnqueued(TrackID identifier)
 {
-    // Exhausting one append is not end-of-stream: more MSE segments may arrive.
-    if (auto nativePlayer = player())
+    m_fullyEnqueuedTracks.add(identifier);
+    // End only after every retained coded frame has reached the decoder.
+    if (auto nativePlayer = player()) {
+        if (m_endOfStream && (!m_deferredSample || m_deferredSample->trackID() != identifier))
+            nativePlayer->endTrack(identifier);
         nativePlayer->wake();
+    }
 }
 void SourceBufferPrivateScarlet::endOfStream()
 {
+    m_endOfStream = true;
     if (auto nativePlayer = player()) {
-        for (auto& [local, identifier] : m_trackIdentifiers)
-            nativePlayer->endTrack(identifier);
+        for (auto identifier : m_fullyEnqueuedTracks) {
+            if (!m_deferredSample || m_deferredSample->trackID() != identifier)
+                nativePlayer->endTrack(identifier);
+        }
     }
 }
 #if !RELEASE_LOG_DISABLED

@@ -216,7 +216,7 @@ void MediaPlayerPrivateScarlet::cancelLoad()
     m_size = { };
     m_status = { };
     m_status.paused = true;
-    m_inputFinished = m_endSubmitted = m_passedCors = m_loadingProgress = false;
+    m_inputFinished = m_endSubmitted = m_demuxEnded = m_replayPending = m_passedCors = m_loadingProgress = false;
     m_seekTarget = MediaTime::invalidTime();
     m_seekReadyForCompletion = false;
     setNetworkState(MediaPlayer::NetworkState::Empty);
@@ -276,8 +276,14 @@ bool MediaPlayerPrivateScarlet::configureTrack(const ScarletMediaTrack& track)
     if (!m_session || scarlet_media_session_configure(m_session, &track) != SCARLET_MEDIA_OK)
         return false;
     m_tracks.ensure(track.identifier, [&] { return TrackState { track.kind, { } }; });
-    if (track.kind == SCARLET_MEDIA_VIDEO)
-        m_size = FloatSize { static_cast<float>(track.width), static_cast<float>(track.height) };
+    if (track.kind == SCARLET_MEDIA_VIDEO) {
+        auto size = FloatSize { static_cast<float>(track.width), static_cast<float>(track.height) };
+        if (m_size != size) {
+            m_size = size;
+            if (auto player = m_player.get())
+                player->sizeChanged();
+        }
+    }
     wake();
     return true;
 }
@@ -314,6 +320,10 @@ void MediaPlayerPrivateScarlet::pumpParser()
         if (!enqueueSample(m_replay.first()))
             return;
         m_replay.removeFirst();
+    }
+    if (std::exchange(m_replayPending, false) && m_demuxEnded) {
+        for (auto& [identifier, track] : m_tracks)
+            endTrack(identifier);
     }
     if (!m_parser)
         return;
@@ -356,6 +366,7 @@ void MediaPlayerPrivateScarlet::pumpParser()
             fail(MediaPlayer::NetworkState::DecodeError);
             return;
         } else if (event.kind == SCARLET_MEDIA_APPEND_DONE && m_endSubmitted && event.append_identifier == m_appendIdentifier) {
+            m_demuxEnded = true;
             for (auto& [identifier, track] : m_tracks)
                 endTrack(identifier);
             setNetworkState(MediaPlayer::NetworkState::Loaded);
@@ -591,7 +602,7 @@ Ref<MediaTimePromise> MediaPlayerPrivateScarlet::seekToTarget(const SeekTarget& 
         return seekPromise;
     }
 #endif
-    if (!m_buffered.contain(target.time)) {
+    if (!m_buffered.contain(target.time) && (m_packets.isEmpty() || target.time != duration())) {
         m_seekTarget = MediaTime::invalidTime();
         m_seekPromise.reset();
         return MediaTimePromise::createAndReject(PlatformMediaError::NotReady);
@@ -603,6 +614,7 @@ Ref<MediaTimePromise> MediaPlayerPrivateScarlet::seekToTarget(const SeekTarget& 
             start = sample->decodeTime();
     }
     m_replay.clear();
+    m_replayPending = true;
     for (auto& sample : m_packets) {
         if (sample->decodeTime() >= start)
             m_replay.append(sample.copyRef());

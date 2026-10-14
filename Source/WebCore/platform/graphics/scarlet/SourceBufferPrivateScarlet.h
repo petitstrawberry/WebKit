@@ -50,6 +50,8 @@ private:
     RunLoop::Timer m_timer;
     HashMap<uint64_t, TrackID> m_trackIdentifiers;
     HashSet<TrackID> m_waitingTracks;
+    HashSet<TrackID> m_fullyEnqueuedTracks;
+    bool m_endOfStream { false };
     RefPtr<SharedBuffer> m_appendData;
     size_t m_appendOffset { 0 };
     uint64_t m_appendIdentifier { 0 };
