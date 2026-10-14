@@ -27,7 +27,7 @@
 #include "ImageUtilities.h"
 
 #if USE(SKIA)
-#include "GLContext.h"
+#include "SkiaGpuContext.h"
 #include "MIMETypeRegistry.h"
 #include "NativeImage.h"
 #include "PlatformDisplay.h"
@@ -81,7 +81,7 @@ static SkWebpEncoder::Options webpEncoderOptions(std::optional<double> quality)
 
 static sk_sp<SkData> encodeAcceleratedImage(const NativeImage& nativeImage, const String& mimeType, std::optional<double> quality)
 {
-    if (!PlatformDisplay::sharedDisplay().skiaGLContext()->makeContextCurrent())
+    if (!prepareSkiaContext())
         return nullptr;
 
     auto* grContext = nativeImage.grContext();
