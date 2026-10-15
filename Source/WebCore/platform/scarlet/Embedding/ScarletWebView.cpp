@@ -987,7 +987,7 @@ extern "C" int32_t scarlet_webview_create(const SWVConfiguration* configuration,
         // Composition-only frames stay on the retained tree. DOM layer changes
         // use the same Page scheduler as script and layout rendering requests.
         if (view->page)
-            view->page->scheduleRenderingUpdate();
+            view->page->scheduleRenderingUpdate({ RenderingUpdateStep::LayerFlush });
         else
             view->loadState.needsRenderingUpdate = true;
     });
