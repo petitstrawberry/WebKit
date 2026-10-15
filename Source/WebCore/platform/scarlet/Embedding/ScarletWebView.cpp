@@ -1253,6 +1253,20 @@ extern "C" int32_t scarlet_webview_output_acquire(SWVCompositorOutput* output, S
     return SWV_UNSUPPORTED;
 #endif
 }
+extern "C" int32_t scarlet_webview_output_damage(SWVCompositorOutput* output, uint64_t generation, uint32_t* rect)
+{
+    if (!output || !generation || !rect) return SWV_INVALID_ARGUMENT;
+    std::fill_n(rect, 4, 0);
+#if USE(COORDINATED_GRAPHICS)
+    IntRect damage;
+    if (output->output->frameDamage(generation, damage)) return SWV_STALE_REQUEST;
+    rect[0] = damage.x(); rect[1] = damage.y();
+    rect[2] = damage.width(); rect[3] = damage.height();
+    return SWV_OK;
+#else
+    return SWV_UNSUPPORTED;
+#endif
+}
 extern "C" int32_t scarlet_webview_output_release(SWVCompositorOutput* output, uint64_t generation)
 {
     if (!output || !generation) return SWV_INVALID_ARGUMENT;

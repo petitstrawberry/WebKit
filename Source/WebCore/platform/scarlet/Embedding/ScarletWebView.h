@@ -122,6 +122,9 @@ typedef struct SWVCompositorOutput SWVCompositorOutput;
 int32_t scarlet_webview_compositor_output(ScarletWebView*, SWVCompositorOutput**);
 void scarlet_webview_output_destroy(SWVCompositorOutput*);
 int32_t scarlet_webview_output_acquire(SWVCompositorOutput*, SWVGpuFrame*, uint64_t* image, uint64_t* epoch, double* scale);
+/* Physical bounding damage accumulated across completions skipped before acquire.
+ * Query a leased generation on any thread; first/resize/navigation output is full. */
+int32_t scarlet_webview_output_damage(SWVCompositorOutput*, uint64_t generation, uint32_t rect[4]);
 int32_t scarlet_webview_output_release(SWVCompositorOutput*, uint64_t generation);
 // Owner-only: tag subsequent scene commits for navigation filtering.
 int32_t scarlet_webview_set_output_epoch(ScarletWebView*, uint64_t epoch);

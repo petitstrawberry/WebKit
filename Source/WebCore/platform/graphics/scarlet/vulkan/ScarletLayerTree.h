@@ -9,6 +9,7 @@
 #include "GraphicsLayerFactory.h"
 #include "GraphicsLayer.h"
 #include "IntSize.h"
+#include "IntRect.h"
 #include <array>
 #include <atomic>
 #include <memory>
@@ -34,11 +35,13 @@ public:
             uint32_t width { 0 }, height { 0 };
             uint64_t generation { 0 }, imageIdentifier { 0 }, epoch { 0 };
             double scale { 1 };
+            IntRect damage;
         };
         ~Output();
         int acquire(Frame&);
         int release(uint64_t);
         int imageIdentifier(uint64_t, uint64_t&);
+        int frameDamage(uint64_t, IntRect&);
         unsigned state() const;
         unsigned capacity() const;
         uint64_t generation() const;
@@ -52,6 +55,7 @@ public:
         bool live { true }, failed { false }, pending { false };
         uint64_t nextGeneration { 0 };
         Statistics counters;
+        IntRect unacquiredDamage;
         std::function<void()> wake;
         void notify();
     };

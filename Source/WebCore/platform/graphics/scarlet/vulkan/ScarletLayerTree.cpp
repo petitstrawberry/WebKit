@@ -48,6 +48,9 @@ int ScarletLayerTree::Output::acquire(Frame& out)
     if (handle < 0) return -1;
     out = latest->frame;
     out.handle = handle;
+    out.damage = unacquiredDamage;
+    latest->frame.damage = unacquiredDamage;
+    unacquiredDamage = { };
     latest->ready = false;
     latest->leased = true;
     return 0;
@@ -70,6 +73,16 @@ int ScarletLayerTree::Output::imageIdentifier(uint64_t generation, uint64_t& out
     for (const auto& slot : slots)
         if (slot.leased && slot.frame.generation == generation) {
             out = slot.frame.imageIdentifier;
+            return 0;
+        }
+    return 1;
+}
+int ScarletLayerTree::Output::frameDamage(uint64_t generation, IntRect& out)
+{
+    std::lock_guard lock(mutex);
+    for (const auto& slot : slots)
+        if (slot.leased && slot.frame.generation == generation) {
+            out = slot.frame.damage;
             return 0;
         }
     return 1;
@@ -113,6 +126,7 @@ struct ScarletLayerTree::Scene {
     double scale { 1 };
     uint64_t epoch { 0 }, imageIdentifier { 0 }, paintedPixels { 0 };
     unsigned pendingSlot { 0 };
+    IntRect presentationDamage;
     bool animations { false }, hasPublished { false };
 };
 std::unique_ptr<ScarletLayerTree> ScarletLayerTree::create(Function<void()>&& schedule)
@@ -383,6 +397,7 @@ bool ScarletLayerTree::commit()
         for (auto& slot : scene.slots) slot.damage.reset();
         std::lock_guard outputLock(m_output->mutex);
         for (auto& slot : m_output->slots) slot.ready = false;
+        m_output->unacquiredDamage = { };
     }
     scene.size = size;
     scene.scale = deviceScale;
@@ -417,6 +432,7 @@ void ScarletLayerTree::render()
             slot.frame.generation = ++m_output->nextGeneration;
             slot.frame.epoch = scene.epoch;
             slot.frame.scale = scene.scale;
+            m_output->unacquiredDamage.unite(scene.presentationDamage);
             slot.reserved = false;
             slot.ready = true;
             m_output->pending = false;
@@ -502,6 +518,14 @@ void ScarletLayerTree::render()
     for (auto rect : damage.rectsForPainting()) {
         rect.intersect(IntRect { IntPoint { }, scene.size });
         scene.paintedPixels += static_cast<uint64_t>(rect.width()) * rect.height();
+    }
+    scene.presentationDamage = { IntPoint { }, scene.size };
+    if (scene.hasPublished && delta) {
+        scene.presentationDamage = { };
+        for (auto rect : delta->rectsForPainting()) {
+            rect.intersect(IntRect { IntPoint { }, scene.size });
+            scene.presentationDamage.unite(rect);
+        }
     }
     scene.pendingSlot = index;
     m_nextFrame = MonotonicTime::now() + Seconds { 1.0 / 60 };
