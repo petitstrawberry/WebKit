@@ -627,23 +627,23 @@ bool SkiaCompositingLayer::computeTransformsAndAnimations(const TransformationMa
 void SkiaCompositingLayer::collectDamageForFrame(SkCanvas& canvas, Damage& frameDamage)
 {
 #if ENABLE(DAMAGE_TRACKING)
-        // Only the layer paint() is called on needs the table, so only the root ever allocates one.
-        if (!m_layerRectTracker)
-            lazyInitialize(m_layerRectTracker, makeUnique<LayerRectTracker>());
-        m_layerRectTracker->advanceToNextFrame();
+    // Only the layer paint() is called on needs the table, so only the root ever allocates one.
+    if (!m_layerRectTracker)
+        lazyInitialize(m_layerRectTracker, makeUnique<LayerRectTracker>());
+    m_layerRectTracker->advanceToNextFrame();
 
-        PaintContext collectContext;
-        collectContext.collectState.emplace(frameDamage, *m_layerRectTracker);
+    PaintContext collectContext;
+    collectContext.collectState.emplace(frameDamage, *m_layerRectTracker);
 
-        // Sized like the canvas that will be drawn into, so both walks clip against the same device
-        // bounds. The layer's own size is in layer coordinates, which the root transform scales to the
-        // device by the device pixel ratio.
-        const auto canvasSize = canvas.getBaseLayerSize();
-        SkNoDrawCanvas noDrawCanvas(canvasSize.width(), canvasSize.height());
-        recursivePaint(noDrawCanvas, collectContext);
+    // Sized like the canvas that will be drawn into, so both walks clip against the same device
+    // bounds. The layer's own size is in layer coordinates, which the root transform scales to the
+    // device by the device pixel ratio.
+    const auto canvasSize = canvas.getBaseLayerSize();
+    SkNoDrawCanvas noDrawCanvas(canvasSize.width(), canvasSize.height());
+    recursivePaint(noDrawCanvas, collectContext);
 
-        m_layerRectTracker->damageStaleLayerRectsAndAdvanceEntries(frameDamage);
-        resolveBackdropDamage(collectContext.collectState->backdropRectsInFrame, frameDamage);
+    m_layerRectTracker->damageStaleLayerRectsAndAdvanceEntries(frameDamage);
+    resolveBackdropDamage(collectContext.collectState->backdropRectsInFrame, frameDamage);
 #else
     UNUSED_PARAM(canvas);
     UNUSED_PARAM(frameDamage);
@@ -652,8 +652,13 @@ void SkiaCompositingLayer::collectDamageForFrame(SkCanvas& canvas, Damage& frame
 bool SkiaCompositingLayer::collectDamage(const IntSize& size, Damage& damage)
 {
     bool animations = computeTransformsAndAnimations({ }, { }, MonotonicTime::now());
+#if ENABLE(DAMAGE_TRACKING)
     SkNoDrawCanvas canvas(size.width(), size.height());
     collectDamageForFrame(canvas, damage);
+#else
+    UNUSED_PARAM(size);
+    damage.makeFull();
+#endif
     return animations;
 }
 

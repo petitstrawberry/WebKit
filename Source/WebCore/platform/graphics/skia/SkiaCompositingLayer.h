@@ -221,6 +221,7 @@ private:
     };
     using PaintFunction = Function<void(SkCanvas&, PaintContext&)>;
 
+    void collectDamageForFrame(SkCanvas&, Damage&);
     void recursivePaint(SkCanvas&, PaintContext&);
     void paintWithOpacity(SkCanvas&, PaintContext&);
     void paintWithReplica(SkCanvas&, PaintContext&);
@@ -233,7 +234,6 @@ private:
     void paintRepaintCounter(SkCanvas&, PaintContext&);
 #if ENABLE(DAMAGE_TRACKING)
     void collectFrameDamage(SkCanvas&, PaintContext&);
-    void collectDamageForFrame(SkCanvas&, Damage&);
     void collectBackdropDamage(SkCanvas&, PaintContext&);
     void collectGroupDamage(SkCanvas&, PaintContext&);
     void addGroupDamage(SkCanvas&, PaintContext&, const Vector<IntRect, 1>& overlapRects);
