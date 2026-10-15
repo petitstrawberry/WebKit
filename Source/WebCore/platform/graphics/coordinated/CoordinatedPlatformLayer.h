@@ -78,6 +78,7 @@ public:
     // FIXME: remove this client when a subclass is added for the WebProcess.
     class Client {
     public:
+        virtual bool compositesOnMainThread() const { return false; }
         virtual void attachLayer(CoordinatedPlatformLayer&) = 0;
         virtual void detachLayer(CoordinatedPlatformLayer&) = 0;
 #if USE(CAIRO)
@@ -93,6 +94,7 @@ public:
         virtual int maxTextureSize() const = 0;
         virtual void willPaintTile() = 0;
         virtual void didPaintTile() = 0;
+        virtual void didPaintTile(const IntRect&) { didPaintTile(); }
     };
 
     static Ref<CoordinatedPlatformLayer> create();
@@ -225,11 +227,13 @@ public:
 
     void willPaintTile();
     void didPaintTile();
+    void didPaintTile(const IntRect&);
     void waitUntilPaintingComplete();
 
 private:
     explicit CoordinatedPlatformLayer(Client*);
 
+    void assertIsCompositingThread() const;
     void removeFromParent();
 
     void notifyCompositionRequired();
@@ -290,6 +294,8 @@ private:
 
     // FIXME: remove the client when a subclass is added for the WebProcess.
     Client* m_client { nullptr };
+    // Immutable after invalidateClient(), so target teardown keeps its owner contract.
+    RunLoop* const m_mainThreadCompositingRunLoop;
 
     const PlatformLayerIdentifier m_id;
 

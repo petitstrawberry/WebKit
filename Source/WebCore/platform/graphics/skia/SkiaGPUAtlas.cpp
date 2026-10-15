@@ -27,6 +27,75 @@
 #include "SkiaGPUAtlas.h"
 
 #if USE(SKIA)
+#if PLATFORM(SCARLET)
+
+#include "PlatformDisplay.h"
+#include "SkiaImageAtlasLayout.h"
+#include <skia/core/SkCanvas.h>
+#include <skia/core/SkColorSpace.h>
+#include <skia/core/SkPaint.h>
+#include <skia/gpu/ganesh/GrDirectContext.h>
+#include <skia/gpu/ganesh/SkSurfaceGanesh.h>
+#include <wtf/MainThread.h>
+#include <wtf/TZoneMallocInlines.h>
+namespace WebCore {
+WTF_MAKE_TZONE_ALLOCATED_IMPL(SkiaGPUAtlas);
+SkiaGPUAtlas::SkiaGPUAtlas(sk_sp<SkSurface>&& surface, Ref<AtlasUploadCondition>&& condition, const sk_sp<GrContextThreadSafeProxy>& proxy, const SkiaImageAtlasLayout& layout, const IntSize& size)
+    : m_surface(WTF::move(surface))
+    , m_uploadCondition(WTF::move(condition))
+    , m_threadSafeGrContext(proxy)
+    , m_layout(layout)
+    , m_size(size)
+{
+    for (const auto& entry : layout.entries()) {
+        const auto& rect = entry.atlasRect;
+        m_imageToRect.add(entry.rasterImage.get(), SkRect::MakeXYWH(rect.x(), rect.y(), rect.width(), rect.height()));
+    }
+}
+SkiaGPUAtlas::~SkiaGPUAtlas() = default;
+RefPtr<SkiaGPUAtlas> SkiaGPUAtlas::create(const SkiaImageAtlasLayout& layout, Ref<AtlasUploadCondition>&& condition, const sk_sp<GrContextThreadSafeProxy>& proxy)
+{
+    RELEASE_ASSERT(isMainThread());
+    auto& display = PlatformDisplay::sharedDisplay();
+    if (!display.prepareSkiaContext() || layout.atlasSize().isEmpty())
+        return nullptr;
+    auto* context = display.skiaGrContext();
+    RELEASE_ASSERT(context->threadSafeProxy() == proxy);
+    const auto& size = layout.atlasSize();
+    auto info = SkImageInfo::Make(size.width(), size.height(), kBGRA_8888_SkColorType, kPremul_SkAlphaType, SkColorSpace::MakeSRGB());
+    auto surface = SkSurfaces::RenderTarget(context, skgpu::Budgeted::kYes, info);
+    if (!surface)
+        return nullptr;
+    return adoptRef(*new SkiaGPUAtlas(WTF::move(surface), WTF::move(condition), proxy, layout, size));
+}
+void SkiaGPUAtlas::uploadImages()
+{
+    RELEASE_ASSERT(isMainThread());
+    auto* canvas = m_surface->getCanvas();
+    canvas->clear(SK_ColorTRANSPARENT);
+    SkPaint paint;
+    paint.setBlendMode(SkBlendMode::kSrc);
+    for (const auto& entry : m_layout->entries())
+        canvas->drawImage(entry.rasterImage, entry.atlasRect.x(), entry.atlasRect.y(), SkSamplingOptions(), &paint);
+    m_image = m_surface->makeImageSnapshot();
+    RELEASE_ASSERT(m_image && m_image->isTextureBacked());
+}
+void SkiaGPUAtlas::waitForUpload() const
+{
+    // Upload and consumption share the owner Ganesh command stream.
+    RELEASE_ASSERT(isMainThread() && m_image);
+}
+sk_sp<SkImage> SkiaGPUAtlas::atlasImageForCurrentThread() const
+{
+    waitForUpload();
+    auto* context = PlatformDisplay::sharedDisplay().skiaGrContext();
+    RELEASE_ASSERT(context && context->threadSafeProxy() == m_threadSafeGrContext);
+    return m_image;
+}
+} // namespace WebCore
+
+#else
+
 #include "BitmapTexture.h"
 #include "GLContext.h"
 #include "PlatformDisplay.h"
@@ -175,4 +244,6 @@ sk_sp<SkImage> SkiaGPUAtlas::atlasImageForCurrentThread() const
 
 } // namespace WebCore
 
+
+#endif // PLATFORM(SCARLET)
 #endif // USE(SKIA)

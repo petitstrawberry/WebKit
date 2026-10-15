@@ -33,8 +33,10 @@
 
 #if USE(SKIA)
 #include "FontRenderOptions.h"
+#if !PLATFORM(SCARLET)
 #include "GLContext.h"
 #include "GLFence.h"
+#endif
 #include "PlatformDisplay.h"
 #include "ProcessCapabilities.h"
 #include "SkiaUtilities.h"
@@ -42,14 +44,18 @@ WTF_IGNORE_WARNINGS_IN_THIRD_PARTY_CODE_BEGIN
 #include <skia/core/SkColorSpace.h>
 #include <skia/core/SkImage.h>
 #include <skia/core/SkStream.h>
+#if !PLATFORM(SCARLET)
 #include <skia/gpu/ganesh/gl/GrGLDirectContext.h>
+#endif
 WTF_IGNORE_WARNINGS_IN_THIRD_PARTY_CODE_END
 #include <wtf/MainThread.h>
 
+#if !PLATFORM(SCARLET)
 #if USE(LIBEPOXY)
 #include <epoxy/gl.h>
 #else
 #include <GLES3/gl3.h>
+#endif
 #endif
 #endif
 
@@ -223,6 +229,9 @@ void CoordinatedAcceleratedTileBuffer::completePainting()
 #else
     if (m_recorder)
         m_displayList = m_recorder->detach();
+#if PLATFORM(SCARLET)
+    RELEASE_ASSERT(m_displayList);
+#endif
 #endif
 
     CoordinatedTileBuffer::completePainting();

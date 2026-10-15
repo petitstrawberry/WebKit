@@ -28,7 +28,7 @@
 #pragma once
 
 #include <wtf/Platform.h>
-#if PLATFORM(SCARLET)
+#if PLATFORM(SCARLET) && !USE(COORDINATED_GRAPHICS)
 namespace WebCore {
 class ScarletPlatformLayer;
 }
@@ -50,7 +50,7 @@ using PlatformLayer = WebCore::TextureMapperPlatformLayer;
 using PlatformLayer = void*;
 #endif
 
-#if PLATFORM(SCARLET)
+#if PLATFORM(SCARLET) && !USE(COORDINATED_GRAPHICS)
 #include "ScarletPlatformLayerContainer.h"
 using PlatformLayerContainer = WebCore::ScarletPlatformLayerContainer;
 #elif PLATFORM(COCOA)

@@ -27,7 +27,6 @@
 #include "SkiaCompositingLayer.h"
 
 #if USE(COORDINATED_GRAPHICS) && USE(SKIA) && !USE(TEXTURE_MAPPER)
-#include "BitmapTexture.h"
 #include "CoordinatedAnimatedBackingStoreClient.h"
 #include "CoordinatedImageBackingStore.h"
 #include "CoordinatedPlatformLayerBuffer.h"
@@ -50,8 +49,6 @@ WTF_IGNORE_WARNINGS_IN_THIRD_PARTY_CODE_BEGIN
 #include <skia/gpu/ganesh/GrBackendSurface.h>
 #include <skia/gpu/ganesh/SkImageGanesh.h>
 #include <skia/gpu/ganesh/SkSurfaceGanesh.h>
-#include <skia/gpu/ganesh/gl/GrGLBackendSurface.h>
-#include <skia/gpu/ganesh/gl/GrGLDirectContext.h>
 #include <skia/utils/SkNoDrawCanvas.h>
 WTF_IGNORE_WARNINGS_IN_THIRD_PARTY_CODE_END
 #include <wtf/Scope.h>
@@ -567,7 +564,7 @@ bool SkiaCompositingLayer::computeTransformsAndAnimations(const TransformationMa
     return hasRunningAnimations;
 }
 
-bool SkiaCompositingLayer::paint(SkCanvas& canvas, std::optional<Damage>& frameDamage, const std::optional<Damage>& priorTargetDamage, std::optional<SkColor> clearColor)
+bool SkiaCompositingLayer::paint(SkCanvas& canvas, std::optional<Damage>& frameDamage, const std::optional<Damage>& priorTargetDamage, std::optional<SkColor> clearColor, Vector<Function<void(MonotonicTime)>>* presentationCallbacks)
 {
     // Both walks below assume the animations have been applied and the transforms computed.
     bool hasRunningAnimations = computeTransformsAndAnimations({ }, { }, MonotonicTime::now());
@@ -636,6 +633,7 @@ bool SkiaCompositingLayer::paint(SkCanvas& canvas, std::optional<Damage>& frameD
 
         PaintContext context;
         context.compositingDamageRegion = WTF::move(damageRegion);
+        context.presentationCallbacks = presentationCallbacks;
 
         recursivePaint(canvas, context);
         context.imageSetBatch.flushIfNeeded(canvas);
@@ -726,6 +724,7 @@ void SkiaCompositingLayer::paintContents(SkCanvas& canvas, PaintContext& context
     SkM44 transform(combinedTransform(context));
 
     const auto ctm = transform.asM33();
+    const auto contentsInDevice = SkMatrix::Concat(canvas.getLocalToDeviceAs3x3(), ctm).mapRect(SkRect(m_contentsRect));
     bool enableAntialias = !ctm.preservesAxisAlignment() && !ctm.preservesRightAngles();
 
     auto shouldBlend = [&]() -> bool {
@@ -873,6 +872,12 @@ void SkiaCompositingLayer::paintContents(SkCanvas& canvas, PaintContext& context
         }
 
         if (image) {
+            if (m_contentsBuffer && context.presentationCallbacks && context.opacity > 0
+                && contentsInDevice.intersects(SkRect::Make(canvas.getDeviceClipBounds()))
+                && (!context.damageRegionOrNull() || context.damageRegionOrNull()->intersects(contentsInDevice))) {
+                if (auto callback = m_contentsBuffer->takePresentationCallback())
+                    context.presentationCallbacks->append(WTF::move(callback));
+            }
             if (shouldPaintNow) {
                 if (rotationMatrix)
                     canvas.concat(*rotationMatrix);

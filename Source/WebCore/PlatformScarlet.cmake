@@ -50,7 +50,6 @@ list(APPEND WebCore_SOURCES
     platform/scarlet/PlatformKeyboardEventScarlet.cpp
     platform/scarlet/SharedMemoryScarlet.cpp
     platform/graphics/scarlet/SystemFontDatabaseScarlet.cpp
-    platform/graphics/scarlet/GraphicsLayerScarlet.cpp
     platform/network/scarlet/ResourceHandleScarletOffline.cpp
     platform/network/scarlet/CurlSSLHandleScarlet.cpp
     platform/network/scarlet/NetworkStateNotifierScarlet.cpp
@@ -63,7 +62,30 @@ list(APPEND WebCore_SOURCES
 list(REMOVE_ITEM WebCore_SOURCES platform/network/curl/DNSResolveQueueCurl.cpp)
 list(APPEND WebCore_SOURCES platform/network/scarlet/DNSResolveQueueScarletOffline.cpp)
 
-# The CPU port does not use EGL, libwpe, TextureMapper or CoordinatedGraphics.
+# The native compositor shares the WebCore owner thread and Ganesh context.
+if (SCARLET_USE_COORDINATED_COMPOSITOR)
+    include(platform/CoordinatedGraphics.cmake)
+    list(APPEND WebCore_PRIVATE_INCLUDE_DIRECTORIES
+        ${WEBCORE_DIR}/platform/graphics/texmap)
+    list(APPEND WebCore_SOURCES
+        platform/graphics/texmap/TextureMapperAnimation.cpp
+        platform/graphics/scarlet/vulkan/ScarletLayerTree.cpp
+        platform/graphics/skia/SkiaBackingStore.cpp
+        platform/graphics/skia/SkiaCompositingLayer.cpp
+        platform/graphics/skia/SkiaCompositingLayer3DRenderingContext.cpp
+        platform/graphics/skia/SkiaCompositingLayerFilters.cpp
+        platform/graphics/skia/SkiaCompositingLayerImageSetBatch.cpp
+        platform/graphics/skia/SkiaCompositingLayerOverlapRegions.cpp
+        platform/graphics/skia/SkiaGPUAtlas.cpp
+        platform/graphics/skia/SkiaPaintingEngine.cpp
+        platform/graphics/skia/SkiaReplayAtlas.cpp
+        platform/graphics/skia/SkiaReplayCanvas.cpp)
+    list(APPEND WebCore_PRIVATE_FRAMEWORK_HEADERS
+        platform/graphics/scarlet/vulkan/ScarletLayerTree.h)
+else ()
+    list(APPEND WebCore_SOURCES platform/graphics/scarlet/GraphicsLayerScarlet.cpp)
+endif ()
+# No EGL, libwpe, or TextureMapper renderer is used.
 
 
 list(APPEND WebCore_PRIVATE_FRAMEWORK_HEADERS

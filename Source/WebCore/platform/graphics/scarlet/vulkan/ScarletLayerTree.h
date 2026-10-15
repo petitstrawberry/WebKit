@@ -10,6 +10,8 @@
 #include "GraphicsLayer.h"
 #include "IntSize.h"
 #include "SkiaCompositingLayer.h"
+#include <cstdint>
+#include <memory>
 #include <wtf/Function.h>
 #include <wtf/HashSet.h>
 #include <wtf/MonotonicTime.h>
@@ -28,6 +30,7 @@ public:
     void setRootLayer(GraphicsLayer*);
     void setOverlayLayer(GraphicsLayer*);
     void setViewport(const IntSize& cssViewport, float deviceScale);
+    // Commit platform state after Page::finalizeRenderingUpdate performed the layer flush.
     bool flush(LocalFrameView&);
     // Damage is in device pixels. A missing prior damage means an unknown target;
     // an empty prior damage means valid target pixels with nothing owed.
@@ -35,7 +38,9 @@ public:
     bool paint(SkCanvas&, std::optional<Damage>& frameDamage,
         const std::optional<Damage>& priorTargetDamage = std::nullopt,
         std::optional<SkColor> clearColor = std::nullopt);
-    bool needsComposition() const { return m_compositionRequired || m_runningAnimations; }
+    struct TilePaintStatistics { uint64_t paints { 0 }; uint64_t pixels { 0 }; };
+    TilePaintStatistics tilePaintStatistics() const;
+    bool needsComposition() const;
     void didSubmit(MonotonicTime);
     void discardPendingPresentationCallbacks();
     void detach();
@@ -59,6 +64,7 @@ private:
     int maxTextureSize() const override;
     void willPaintTile() override;
     void didPaintTile() override;
+    void didPaintTile(const IntRect&) override;
 
     Function<void()> m_scheduleRenderingUpdate;
     RunLoop& m_ownerRunLoop;
@@ -70,6 +76,7 @@ private:
     Vector<Function<void(MonotonicTime)>> m_presentationCallbacks;
     IntSize m_cssViewport;
     float m_deviceScale { 1 };
+    TilePaintStatistics m_tilePaintStatistics;
     unsigned m_pendingTiles { 0 };
     bool m_compositionRequired { true };
     bool m_runningAnimations { false };

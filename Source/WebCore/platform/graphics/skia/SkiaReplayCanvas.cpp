@@ -27,8 +27,10 @@
 #include "SkiaReplayCanvas.h"
 
 #if USE(SKIA)
+#if USE(TEXTURE_MAPPER)
 #include "GLContext.h"
 #include "GLFence.h"
+#endif
 #include "PlatformDisplay.h"
 #include "SkiaUtilities.h"
 

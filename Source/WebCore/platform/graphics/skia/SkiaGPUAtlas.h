@@ -26,12 +26,15 @@
 #pragma once
 
 #if USE(SKIA)
+#if !PLATFORM(SCARLET)
 #include "BitmapTexture.h"
 #include "GLFence.h"
+#endif
 #include "IntSize.h"
 
 WTF_IGNORE_WARNINGS_IN_THIRD_PARTY_CODE_BEGIN
 #include <skia/core/SkImage.h>
+#include <skia/core/SkSurface.h>
 #include <skia/core/SkRect.h>
 #include <skia/gpu/ganesh/GrBackendSurface.h>
 #include <skia/gpu/ganesh/GrContextThreadSafeProxy.h>
@@ -92,7 +95,11 @@ class SkiaGPUAtlas : public ThreadSafeRefCounted<SkiaGPUAtlas, WTF::DestructionT
     WTF_MAKE_TZONE_ALLOCATED(SkiaGPUAtlas);
     WTF_MAKE_NONCOPYABLE(SkiaGPUAtlas);
 public:
+#if PLATFORM(SCARLET)
+    static RefPtr<SkiaGPUAtlas> create(const SkiaImageAtlasLayout&, Ref<AtlasUploadCondition>&&, const sk_sp<GrContextThreadSafeProxy>&);
+#else
     static RefPtr<SkiaGPUAtlas> create(const SkiaImageAtlasLayout&, Ref<BitmapTexture>&&, Ref<AtlasUploadCondition>&&, const sk_sp<GrContextThreadSafeProxy>&);
+#endif
 
     // Upload images into the atlas texture. Can run from any thread for dma-buf backed textures.
     void uploadImages();
@@ -101,18 +108,31 @@ public:
 
     const ImageToRectMap& imageToRect() const LIFETIME_BOUND { return m_imageToRect; }
     const IntSize& size() const LIFETIME_BOUND { return m_size; }
+#if !PLATFORM(SCARLET)
     BitmapTexture& atlasTexture() const { return m_atlasTexture.get(); }
+#endif
     sk_sp<SkImage> atlasImageForCurrentThread() const;
 
 private:
+#if PLATFORM(SCARLET)
+    SkiaGPUAtlas(sk_sp<SkSurface>&&, Ref<AtlasUploadCondition>&&, const sk_sp<GrContextThreadSafeProxy>&, const SkiaImageAtlasLayout&, const IntSize&);
+#else
     SkiaGPUAtlas(Ref<BitmapTexture>&&, GrBackendTexture&&, Ref<AtlasUploadCondition>&&, const sk_sp<GrContextThreadSafeProxy>&, const SkiaImageAtlasLayout&, const IntSize&);
+#endif
 
     void waitForUpload() const;
 
+#if PLATFORM(SCARLET)
+    sk_sp<SkSurface> m_surface;
+    sk_sp<SkImage> m_image;
+#else
     const Ref<BitmapTexture> m_atlasTexture;
     GrBackendTexture m_backendTexture;
+#endif
     const Ref<AtlasUploadCondition> m_uploadCondition;
+#if !PLATFORM(SCARLET)
     std::unique_ptr<GLFence> m_uploadFence;
+#endif
     sk_sp<GrContextThreadSafeProxy> m_threadSafeGrContext;
     ImageToRectMap m_imageToRect;
     const Ref<const SkiaImageAtlasLayout> m_layout;

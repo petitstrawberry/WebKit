@@ -1,4 +1,4 @@
-// Direct native page renderer; no GL or coordinated compositor.
+// Native Skia/Vulkan raster and optional retained coordinated compositor.
 page/skia/MemoryReleaseSkia.cpp
 platform/graphics/filters/skia/FEColorMatrixSkiaApplier.cpp
 platform/graphics/filters/skia/FEComponentTransferSkiaApplier.cpp
@@ -41,3 +41,4 @@ platform/graphics/skia/SkiaSerializedImageBuffer.cpp
 platform/graphics/skia/SkiaSystemFallbackFontCache.cpp
 platform/graphics/skia/SkiaTextureAtlasPacker.cpp
 platform/skia/SharedBufferSkia.cpp
+

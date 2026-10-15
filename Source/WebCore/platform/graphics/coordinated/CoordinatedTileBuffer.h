@@ -30,7 +30,9 @@
 
 #if USE(COORDINATED_GRAPHICS)
 
+#if !PLATFORM(SCARLET)
 #include "BitmapTexture.h"
+#endif
 #include "IntSize.h"
 #include "PixelFormat.h"
 #include <wtf/Condition.h>
@@ -66,6 +68,7 @@ public:
     virtual IntSize size() const = 0;
     virtual PixelFormat pixelFormat() const = 0;
     virtual bool isBackedByOpenGL() const = 0;
+    virtual bool isAccelerated() const { return isBackedByOpenGL(); }
 
     bool supportsAlpha() const { return m_flags & SupportsAlpha; }
 
@@ -166,7 +169,15 @@ private:
     CoordinatedAcceleratedTileBuffer(GrSurfaceCharacterization&&, Flags);
 #endif
 
-    bool isBackedByOpenGL() const final { return true; }
+    bool isBackedByOpenGL() const final
+    {
+#if PLATFORM(SCARLET)
+        return false;
+#else
+        return true;
+#endif
+    }
+    bool isAccelerated() const final { return true; }
     IntSize size() const final;
     PixelFormat pixelFormat() const final { return PixelFormat::RGBA8; }
 

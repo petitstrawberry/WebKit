@@ -49,6 +49,8 @@
 #include "SkiaPaintingEngine.h"
 #endif
 
+#include <wtf/RunLoop.h>
+
 namespace WebCore {
 
 Ref<CoordinatedPlatformLayer> CoordinatedPlatformLayer::create(Client& client)
@@ -63,6 +65,7 @@ Ref<CoordinatedPlatformLayer> CoordinatedPlatformLayer::create()
 
 CoordinatedPlatformLayer::CoordinatedPlatformLayer(Client* client)
     : m_client(client)
+    , m_mainThreadCompositingRunLoop(client && client->compositesOnMainThread() ? client->compositingRunLoop() : nullptr)
     , m_id(PlatformLayerIdentifier::generate())
 #if !USE(TEXTURE_MAPPER)
     , m_threadSafeGrContext(m_client ? m_client->paintingEngine().threadSafeGrContext() : nullptr)
@@ -72,6 +75,14 @@ CoordinatedPlatformLayer::CoordinatedPlatformLayer(Client* client)
 }
 
 CoordinatedPlatformLayer::~CoordinatedPlatformLayer() = default;
+
+void CoordinatedPlatformLayer::assertIsCompositingThread() const
+{
+    if (m_mainThreadCompositingRunLoop) {
+        RELEASE_ASSERT(isMainThread() && m_mainThreadCompositingRunLoop == &RunLoop::currentSingleton());
+    } else
+        ASSERT(!isMainThread());
+}
 
 void CoordinatedPlatformLayer::setOwner(GraphicsLayerCoordinated* owner)
 {
@@ -100,7 +111,7 @@ GraphicsLayerCoordinated* CoordinatedPlatformLayer::owner() const
 #if USE(TEXTURE_MAPPER)
 TextureMapperLayer& CoordinatedPlatformLayer::ensureTarget()
 {
-    ASSERT(!isMainThread());
+    assertIsCompositingThread();
     if (!m_target) {
         m_target = makeUnique<TextureMapperLayer>();
 #if ENABLE(DAMAGE_TRACKING)
@@ -116,7 +127,7 @@ TextureMapperLayer& CoordinatedPlatformLayer::ensureTarget()
 
 SkiaCompositingLayer& CoordinatedPlatformLayer::ensureTarget()
 {
-    ASSERT(!isMainThread());
+    assertIsCompositingThread();
     if (!m_target)
         m_target = SkiaCompositingLayer::create();
 #if ENABLE(DAMAGE_TRACKING)
@@ -141,7 +152,7 @@ static bool shouldReleaseBuffer(CoordinatedPlatformLayerBuffer* buffer)
 
 void CoordinatedPlatformLayer::invalidateTarget()
 {
-    ASSERT(!isMainThread());
+    assertIsCompositingThread();
     {
         Locker locker { m_lock };
 #if USE(TEXTURE_MAPPER)
@@ -957,6 +968,8 @@ void CoordinatedPlatformLayer::updateContents(bool affectedByTransformAnimation)
         if (m_backingStoreProxy) {
             m_backingStoreProxy->invalidate();
             m_backingStoreProxy = nullptr;
+            m_pendingTilesCreation = false;
+            m_needsTilesUpdate = false;
             m_pendingChanges.add(Change::BackingStore);
         }
     }
@@ -974,6 +987,8 @@ void CoordinatedPlatformLayer::purgeBackingStores()
         m_backingStoreProxy->invalidate();
         m_backingStoreProxy = nullptr;
     }
+    m_pendingTilesCreation = false;
+    m_needsTilesUpdate = false;
     m_imageBackingStore.current = nullptr;
     if (shouldReleaseBuffer(m_contentsBuffer.pending.get()))
         m_contentsBuffer.pending = nullptr;
@@ -1012,6 +1027,13 @@ void CoordinatedPlatformLayer::didPaintTile()
     // Could be called from painting threads.
     if (m_client)
         m_client->didPaintTile();
+}
+
+void CoordinatedPlatformLayer::didPaintTile(const IntRect& rect)
+{
+    assertIsMainThread();
+    if (m_client)
+        m_client->didPaintTile(rect);
 }
 
 void CoordinatedPlatformLayer::waitUntilPaintingComplete()
@@ -1060,7 +1082,7 @@ void CoordinatedPlatformLayer::flushPendingState()
 
 void CoordinatedPlatformLayer::flushPositionChanges(const OptionSet<CompositionReason>& reasons)
 {
-    ASSERT(!isMainThread());
+    assertIsCompositingThread();
     if (!reasons.containsAny({ CompositionReason::RenderingUpdate, CompositionReason::AsyncScrolling }))
         return;
 
@@ -1086,7 +1108,7 @@ void CoordinatedPlatformLayer::flushPositionChanges(const OptionSet<CompositionR
 
 void CoordinatedPlatformLayer::flushCompositingState(const OptionSet<CompositionReason>& reasons)
 {
-    ASSERT(!isMainThread());
+    assertIsCompositingThread();
     Locker locker { m_lock };
     if (m_pendingChanges.isEmpty() && (!reasons.contains(CompositionReason::RenderingUpdate) || !m_backingStoreProxy))
         return;
@@ -1522,7 +1544,7 @@ void CoordinatedPlatformLayer::flushCompositingStateOnTarget(const OptionSet<Com
 
 bool CoordinatedPlatformLayer::hasPendingBackingStoreTileUpdates() const
 {
-    ASSERT(!isMainThread());
+    assertIsCompositingThread();
 
 #if USE(TEXTURE_MAPPER)
     Locker locker { m_lock };
@@ -1538,7 +1560,7 @@ bool CoordinatedPlatformLayer::hasPendingBackingStoreTileUpdates() const
 
 void CoordinatedPlatformLayer::processPendingBackingStoreTileUpdates()
 {
-    ASSERT(!isMainThread());
+    assertIsCompositingThread();
 
 #if USE(TEXTURE_MAPPER)
     Locker locker { m_lock };

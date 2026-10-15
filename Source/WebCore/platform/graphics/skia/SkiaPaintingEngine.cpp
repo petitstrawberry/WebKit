@@ -27,12 +27,16 @@
 #include "SkiaPaintingEngine.h"
 
 #if USE(COORDINATED_GRAPHICS) && USE(SKIA)
+#if !PLATFORM(SCARLET)
 #include "BitmapTexturePool.h"
+#endif
 #include "CoordinatedBackingStoreProxy.h"
 #include "CoordinatedPlatformLayer.h"
 #include "CoordinatedTileBuffer.h"
 #include "FontRenderOptions.h"
+#if !PLATFORM(SCARLET)
 #include "GLContext.h"
+#endif
 #include "GraphicsContextSkia.h"
 #include "GraphicsLayerCoordinated.h"
 #include "PlatformDisplay.h"
@@ -61,13 +65,19 @@ WTF_IGNORE_WARNINGS_IN_THIRD_PARTY_CODE_END
 #include <wtf/SystemTracing.h>
 #include <wtf/text/StringToIntegerConversion.h>
 
+#include <wtf/MainThread.h>
+
 namespace WebCore {
 
 WTF_MAKE_TZONE_ALLOCATED_IMPL(SkiaPaintingEngine);
 
 static bool canPerformAcceleratedRendering()
 {
+#if PLATFORM(SCARLET)
+    return PlatformDisplay::sharedDisplay().prepareSkiaContext();
+#else
     return ProcessCapabilities::canUseAcceleratedBuffers() && PlatformDisplay::sharedDisplay().skiaGLContext();
+#endif
 }
 
 SkiaPaintingEngine::SkiaPaintingEngine(sk_sp<GrContextThreadSafeProxy>&& threadSafeGrContext)
@@ -82,8 +92,10 @@ SkiaPaintingEngine::SkiaPaintingEngine(sk_sp<GrContextThreadSafeProxy>&& threadS
     }
 #endif
 
+#if !PLATFORM(SCARLET)
     if (auto numberOfCPUThreads = numberOfCPUPaintingThreads())
         lazyInitialize(m_paintingWorkerPool, WorkerPool::create("SkiaCPUWorker"_s, numberOfCPUThreads));
+#endif
 }
 
 SkiaPaintingEngine::~SkiaPaintingEngine() = default;
@@ -134,6 +146,12 @@ Ref<CoordinatedTileBuffer> SkiaPaintingEngine::createBuffer(RenderingMode render
 
 RefPtr<SkiaGPUAtlas> SkiaPaintingEngine::createAtlas(const SkiaImageAtlasLayout& layout, AtlasUploadCondition& uploadCondition)
 {
+#if PLATFORM(SCARLET)
+    auto atlas = SkiaGPUAtlas::create(layout, Ref { uploadCondition }, m_threadSafeGrContext);
+    if (atlas)
+        atlas->uploadImages();
+    return atlas;
+#else
     const auto& atlasSize = layout.atlasSize();
 
     OptionSet<BitmapTexture::Flags> textureFlags { BitmapTexture::Flags::UseBGRALayout, BitmapTexture::Flags::NearestFiltering, BitmapTexture::Flags::SupportsAlpha };
@@ -170,6 +188,8 @@ RefPtr<SkiaGPUAtlas> SkiaPaintingEngine::createAtlas(const SkiaImageAtlasLayout&
         atlas->uploadImages();
     });
     return atlas;
+#endif
+
 }
 
 bool SkiaPaintingEngine::tryReuseCachedAtlases(SkiaRecordingResult& result, unsigned fingerprint)
@@ -185,7 +205,11 @@ bool SkiaPaintingEngine::tryReuseCachedAtlases(SkiaRecordingResult& result, unsi
 Ref<SkiaRecordingResult> SkiaPaintingEngine::record(const GraphicsLayerCoordinated& layer, const IntRect& recordRect, bool contentsOpaque, float contentsScale, unsigned dirtyTilesCount)
 {
     // ### Asynchronous rendering on worker threads ###
+#if PLATFORM(SCARLET)
+    RELEASE_ASSERT(isMainThread() && canPerformAcceleratedRendering());
+#else
     ASSERT(m_paintingWorkerPool);
+#endif
 
     auto renderingMode = canPerformAcceleratedRendering() ? RenderingMode::Accelerated : RenderingMode::Unaccelerated;
 
@@ -211,7 +235,11 @@ Ref<SkiaRecordingResult> SkiaPaintingEngine::record(const GraphicsLayerCoordinat
 
         // Fast path: reuse cached atlases if the image set is unchanged.
         if (!tryReuseCachedAtlases(result.get(), fingerprint)) {
+#if PLATFORM(SCARLET)
+            RELEASE_ASSERT(PlatformDisplay::sharedDisplay().prepareSkiaContext());
+#else
             PlatformDisplay::sharedDisplay().skiaGLContext()->makeContextCurrent();
+#endif
 
             auto* grContext = PlatformDisplay::sharedDisplay().skiaGrContext();
             RELEASE_ASSERT(grContext);
@@ -262,7 +290,7 @@ Ref<CoordinatedTileBuffer> SkiaPaintingEngine::replay(const GraphicsLayerCoordin
     auto buffer = createBuffer(renderingMode, bufferSize, recording->contentsOpaque());
     buffer->beginPainting();
 
-    m_paintingWorkerPool->postTask([platformLayer = WTF::move(platformLayer), buffer = Ref { buffer }, tileRect, dirtyRect, recording = WTF::move(recording), threadSafeGrContext = m_threadSafeGrContext]() mutable {
+    auto paintTile = [platformLayer = WTF::move(platformLayer), buffer = Ref { buffer }, tileRect, dirtyRect, recording = WTF::move(recording), threadSafeGrContext = m_threadSafeGrContext]() mutable {
         if (auto* canvas = buffer->canvas()) {
             auto replayPicture = [](const sk_sp<SkPicture>& picture, SkCanvas* canvas, const IntRect& recordRect, const IntRect& tileRect, const IntRect& dirtyRect, bool isDDLBuffer) {
                 canvas->save();
@@ -282,10 +310,10 @@ Ref<CoordinatedTileBuffer> SkiaPaintingEngine::replay(const GraphicsLayerCoordin
             const bool isDDLBuffer = false;
             const bool needsReplayCanvas = recording->hasFences() || recording->hasGPUAtlases();
 #else
-            const bool isDDLBuffer = buffer->isBackedByOpenGL();
+            const bool isDDLBuffer = buffer->isAccelerated();
             const bool needsReplayCanvas = recording->hasGPUAtlases();
 #endif
-            WTFBeginSignpost(canvas, PaintTile, "Skia/%s%s threaded, dirty region %ix%i+%i+%i", buffer->isBackedByOpenGL() ? "GPU" : "CPU", isDDLBuffer ? "(DDL)" : "", dirtyRect.x(), dirtyRect.y(), dirtyRect.width(), dirtyRect.height());
+            WTFBeginSignpost(canvas, PaintTile, "Skia/%s%s threaded, dirty region %ix%i+%i+%i", buffer->isAccelerated() ? "GPU" : "CPU", isDDLBuffer ? "(DDL)" : "", dirtyRect.x(), dirtyRect.y(), dirtyRect.width(), dirtyRect.height());
             // Use SkiaReplayCanvas if there are GPU fences or GPU atlases to handle.
             if (needsReplayCanvas) {
                 auto replayCanvas = SkiaReplayCanvas::create(tileRect.size(), recording, threadSafeGrContext);
@@ -297,9 +325,23 @@ Ref<CoordinatedTileBuffer> SkiaPaintingEngine::replay(const GraphicsLayerCoordin
             WTFEndSignpost(canvas, PaintTile);
         }
 
+#if PLATFORM(SCARLET)
+        else
+            RELEASE_ASSERT_NOT_REACHED();
+#endif
         buffer->completePainting();
+#if PLATFORM(SCARLET)
+        platformLayer->didPaintTile(intersection(dirtyRect, tileRect));
+#else
         platformLayer->didPaintTile();
-    });
+#endif
+    };
+#if PLATFORM(SCARLET)
+    RELEASE_ASSERT(isMainThread() && buffer->isAccelerated());
+    paintTile();
+#else
+    m_paintingWorkerPool->postTask(WTF::move(paintTile));
+#endif
 
     return buffer;
 }

@@ -88,7 +88,9 @@ private:
         SkRect imageSourceRect() const;
 
     private:
+#if !PLATFORM(SCARLET)
         void ensureTexture(const IntSize&, CoordinatedTileBuffer&);
+#endif
         void update(const IntRect& dirtyRect, const IntRect& tileRect, CoordinatedTileBuffer&);
 
         struct Update {
@@ -101,7 +103,9 @@ private:
         FloatRect m_rect;
         Vector<Update> m_pendingUpdates;
         sk_sp<SkSurface> m_surface;
+#if !PLATFORM(SCARLET)
         RefPtr<BitmapTexture> m_texture;
+#endif
         mutable sk_sp<SkImage> m_cachedImage;
     };
 

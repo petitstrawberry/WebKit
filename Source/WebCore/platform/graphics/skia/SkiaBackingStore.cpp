@@ -27,7 +27,9 @@
 #include "SkiaBackingStore.h"
 
 #if USE(COORDINATED_GRAPHICS) && USE(SKIA) && !USE(TEXTURE_MAPPER)
+#if !PLATFORM(SCARLET)
 #include "BitmapTexturePool.h"
+#endif
 #include "CoordinatedTileBuffer.h"
 #include "FontRenderOptions.h"
 #include "PlatformDisplay.h"
@@ -39,16 +41,20 @@ WTF_IGNORE_WARNINGS_IN_THIRD_PARTY_CODE_BEGIN
 #include <skia/gpu/ganesh/GrBackendSurface.h>
 #include <skia/gpu/ganesh/SkImageGanesh.h>
 #include <skia/gpu/ganesh/SkSurfaceGanesh.h>
+#if !PLATFORM(SCARLET)
 #include <skia/gpu/ganesh/gl/GrGLBackendSurface.h>
+#endif
 WTF_IGNORE_WARNINGS_IN_THIRD_PARTY_CODE_END
 #include <wtf/SystemTracing.h>
 #include <wtf/TZoneMallocInlines.h>
 
+#if !PLATFORM(SCARLET)
 #if USE(LIBEPOXY)
 #include <epoxy/gl.h>
 #else
 #include <GLES2/gl2.h>
 #include <GLES2/gl2ext.h>
+#endif
 #endif
 
 namespace WebCore {
@@ -239,6 +245,7 @@ void SkiaBackingStore::Tile::processPendingUpdateIfNeeded()
     m_pendingUpdates.clear();
 }
 
+#if !PLATFORM(SCARLET)
 void SkiaBackingStore::Tile::ensureTexture(const IntSize& size, CoordinatedTileBuffer& buffer)
 {
     OptionSet<BitmapTexture::Flags> flags;
@@ -265,24 +272,32 @@ void SkiaBackingStore::Tile::ensureTexture(const IntSize& size, CoordinatedTileB
 
     m_cachedImage = nullptr;
 }
+#endif
 
 void SkiaBackingStore::Tile::update(const IntRect& dirtyRect, const IntRect& tileRect, CoordinatedTileBuffer& buffer)
 {
-    WTFBeginSignpost(this, SkiaBackingStoreTileUpdate, "rect %ix%i+%i+%i %s", tileRect.x(), tileRect.y(), tileRect.width(), tileRect.height(), buffer.isBackedByOpenGL() ? "GPUToGPU" : "CPUToGPU");
+#if PLATFORM(SCARLET)
+    RELEASE_ASSERT(!dirtyRect.isEmpty() && (IntRect { IntPoint { }, tileRect.size() }).contains(dirtyRect));
+#endif
+    WTFBeginSignpost(this, SkiaBackingStoreTileUpdate, "rect %ix%i+%i+%i %s", tileRect.x(), tileRect.y(), tileRect.width(), tileRect.height(), buffer.isAccelerated() ? "GPUToGPU" : "CPUToGPU");
 
     FloatRect unscaledTileRect(tileRect);
     unscaledTileRect.scale(1. / m_scale);
 
     if (unscaledTileRect != m_rect) {
         m_rect = unscaledTileRect;
+#if !PLATFORM(SCARLET)
         m_texture = nullptr;
+#endif
         m_surface = nullptr;
     }
 
-    if (buffer.isBackedByOpenGL()) {
+    if (buffer.isAccelerated()) {
         auto& acceleratedBuffer = static_cast<CoordinatedAcceleratedTileBuffer&>(buffer);
         if (auto displayList = acceleratedBuffer.takeDisplayList()) {
+#if !PLATFORM(SCARLET)
             ASSERT(!m_texture);
+#endif
             ASSERT(!m_cachedImage);
 
             auto* grContext = PlatformDisplay::sharedDisplay().skiaGrContext();
@@ -292,15 +307,23 @@ void SkiaBackingStore::Tile::update(const IntRect& dirtyRect, const IntRect& til
             // opaqueness can flip without any other characterization change, and reusing the old
             // surface would then carry the wrong alpha type into its image snapshot.
             const auto& characterization = displayList->characterization();
-            if (!m_surface || !m_surface->isCompatible(characterization) || m_surface->imageInfo().alphaType() != characterization.imageInfo().alphaType())
+            if (!m_surface || !m_surface->isCompatible(characterization) || m_surface->imageInfo().alphaType() != characterization.imageInfo().alphaType()) {
                 m_surface = SkSurfaces::RenderTarget(grContext, skgpu::Budgeted::kYes, characterization.imageInfo(), characterization.sampleCount(), characterization.origin(), &characterization.surfaceProps());
+                RELEASE_ASSERT(m_surface);
+                m_surface->getCanvas()->clear(SK_ColorTRANSPARENT);
+            }
 
             skgpu::ganesh::DrawDDL(m_surface.get(), displayList);
         }
     } else {
+#if PLATFORM(SCARLET)
+        // Native composition has no CPU tile upload or CPU page framebuffer.
+        RELEASE_ASSERT_NOT_REACHED();
+#else
         auto& unacceleratedBuffer = static_cast<CoordinatedUnacceleratedTileBuffer&>(buffer);
         ensureTexture(tileRect.size(), buffer);
         m_texture->updateContents(unacceleratedBuffer.data(), dirtyRect, { }, unacceleratedBuffer.stride(), buffer.pixelFormat());
+#endif
     }
 
     WTFEndSignpost(this, SkiaBackingStoreTileUpdate);
@@ -311,6 +334,7 @@ sk_sp<SkImage> SkiaBackingStore::Tile::image() const
     if (m_surface)
         return m_surface->makeImageSnapshot();
 
+#if !PLATFORM(SCARLET)
     if (!m_cachedImage && m_texture) {
         auto* grContext = PlatformDisplay::sharedDisplay().skiaGrContext();
         ASSERT(grContext);
@@ -332,6 +356,7 @@ sk_sp<SkImage> SkiaBackingStore::Tile::image() const
             static_cast<BitmapTexture*>(userData)->deref();
         }, m_texture.get());
     }
+#endif
     return m_cachedImage;
 }
 
@@ -341,12 +366,14 @@ SkRect SkiaBackingStore::Tile::imageSourceRect() const
     if (m_surface)
         return SkRect::MakeWH(m_surface->width(), m_surface->height());
 
+#if !PLATFORM(SCARLET)
     // The texture image spans allocatedSize() - only the top-left size() region is real content.
     if (m_texture) {
         auto size = m_texture->size();
         return SkRect::MakeWH(size.width(), size.height());
     }
 
+#endif
     // Callers only reach imageSourceRect() after image() returned a valid image, which requires
     // one of m_surface or m_texture to be set, so this fallback is never taken in practice.
     ASSERT_NOT_REACHED();
@@ -356,7 +383,11 @@ SkRect SkiaBackingStore::Tile::imageSourceRect() const
 bool SkiaBackingStore::Tile::isPadded() const
 {
     // A surface snapshot is sized to the tile, so only a texture can be padded.
+#if PLATFORM(SCARLET)
+    return false; // DDL render targets have the exact logical tile size.
+#else
     return m_texture && m_texture->size() != m_texture->allocatedSize();
+#endif
 }
 
 } // namespace WebCore
