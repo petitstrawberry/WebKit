@@ -23,6 +23,19 @@ public:
         explicit Surface(std::unique_ptr<State>&&);
         std::unique_ptr<State> m_state;
     };
+    // Owner-polled completion; only Complete permits external publication.
+    enum class SubmissionStatus : uint8_t { Pending, Complete, Failed };
+    class Submission final {
+    public:
+        ~Submission();
+        Submission(const Submission&) = delete;
+        Submission& operator=(const Submission&) = delete;
+    private:
+        friend class ScarletSkiaVulkan;
+        struct State;
+        explicit Submission(std::unique_ptr<State>&&);
+        std::unique_ptr<State> m_state;
+    };
     static std::shared_ptr<ScarletSkiaVulkan> create();
     ~ScarletSkiaVulkan();
     ScarletSkiaVulkan(const ScarletSkiaVulkan&) = delete;
@@ -31,6 +44,8 @@ public:
     std::unique_ptr<Surface> createSurface(uint32_t width, uint32_t height, const SkSurfaceProps* = nullptr);
     // Wait for actual GPU completion before publishing a shared image.
     bool submit(Surface&);
+    std::unique_ptr<Submission> submitAsync(Surface&);
+    SubmissionStatus submissionStatus(Submission&);
     uint64_t allocatedBytes() const;
 private:
     struct State;

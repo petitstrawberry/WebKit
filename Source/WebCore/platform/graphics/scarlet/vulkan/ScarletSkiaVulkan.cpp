@@ -280,6 +280,57 @@ uint64_t ScarletSkiaVulkan::allocatedBytes() const
     m_state->checkThread();
     return m_state->allocator->totalAllocatedAndUsedMemory().first;
 }
+struct ScarletSkiaVulkan::Submission::State {
+    struct Completion {
+        bool finished { false };
+    };
+    std::shared_ptr<ScarletSkiaVulkan> owner;
+    // The callback owns only this small record, not the device (no owner cycle).
+    std::shared_ptr<Completion> completion { std::make_shared<Completion>() };
+    bool submitted { false };
+};
+ScarletSkiaVulkan::Submission::Submission(std::unique_ptr<State>&& state)
+    : m_state(std::move(state)) { }
+ScarletSkiaVulkan::Submission::~Submission()
+{
+    auto& device = *m_state->owner->m_state;
+    device.checkThread();
+    // Cancellation/resize/shutdown cannot free borrowed output memory early.
+    // Regular completion polling never waits here: finished tokens retire first.
+    if (m_state->submitted && !m_state->completion->finished && !device.context->abandoned()) {
+        device.context->submit(GrSyncCpu::kYes);
+        device.context->checkAsyncWorkCompletion();
+    }
+}
+std::unique_ptr<ScarletSkiaVulkan::Submission> ScarletSkiaVulkan::submitAsync(Surface& surface)
+{
+    m_state->checkThread();
+    if (surface.m_state->owner.get() != this || m_state->context->abandoned())
+        return nullptr;
+    auto state = std::make_unique<Submission::State>();
+    state->owner = shared_from_this();
+    GrFlushInfo info;
+    using Completion = std::shared_ptr<Submission::State::Completion>;
+    info.fFinishedContext = new Completion(state->completion);
+    info.fFinishedProc = [](void* opaque) {
+        std::unique_ptr<Completion> completion(static_cast<Completion*>(opaque));
+        (*completion)->finished = true;
+    };
+    m_state->context->flush(surface.m_state->surface.get(), info);
+    state->submitted = m_state->context->submit(GrSyncCpu::kNo) && !m_state->context->abandoned();
+    return std::unique_ptr<Submission>(new Submission(std::move(state)));
+}
+ScarletSkiaVulkan::SubmissionStatus ScarletSkiaVulkan::submissionStatus(Submission& submission)
+{
+    m_state->checkThread();
+    if (submission.m_state->owner.get() != this || !submission.m_state->submitted || m_state->context->abandoned())
+        return SubmissionStatus::Failed;
+    // Ganesh invokes finished callbacks here, on this context's sole owner.
+    m_state->context->checkAsyncWorkCompletion();
+    if (m_state->context->abandoned())
+        return SubmissionStatus::Failed;
+    return submission.m_state->completion->finished ? SubmissionStatus::Complete : SubmissionStatus::Pending;
+}
 bool ScarletSkiaVulkan::submit(Surface& surface)
 {
     m_state->checkThread();

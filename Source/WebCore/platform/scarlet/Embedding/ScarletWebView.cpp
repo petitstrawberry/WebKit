@@ -98,8 +98,11 @@
 #include <unordered_set>
 #include <vector>
 
-#if !PLATFORM(SCARLET) || !OS(SCARLET) || (!USE(CAIRO) && !USE(SKIA)) || ENABLE(JIT)
-#error "ScarletWebView requires native Scarlet graphics and a non-JIT JavaScript interpreter"
+#if !PLATFORM(SCARLET) || !OS(SCARLET) || (!USE(CAIRO) && !USE(SKIA))
+#error "ScarletWebView requires native Scarlet graphics"
+#endif
+#if ENABLE(JIT) && ENABLE(C_LOOP)
+#error "ScarletWebView JIT requires the native assembly LLInt"
 #endif
 // LowLevelInterpreter.cpp emits the generated assembly interpreter when C_LOOP
 // is disabled. Scarlet currently supports that interpreter on ARM64 ELF only.
@@ -136,6 +139,7 @@ struct ScarletWebView {
             uint64_t ticks { 0 }, tickMicros { 0 }, maxTickMicros { 0 };
             uint64_t runLoopMicros { 0 }, renderingUpdateMicros { 0 }, renderingFinalizeMicros { 0 }, sceneFlushMicros { 0 };
             uint64_t requests { 0 }, requestMicros { 0 }, maxRequestMicros { 0 };
+            uint64_t gpuCompletions { 0 }, gpuCompletionMicros { 0 }, maxGpuCompletionMicros { 0 };
         } counters;
     } paintProfile;
     struct GpuSlot {
@@ -152,6 +156,19 @@ struct ScarletWebView {
         uint32_t width { 0 }, height { 0 };
     };
     std::array<GpuSlot, 2> gpuSlots;
+#if USE(COORDINATED_GRAPHICS)
+    // At most one unpresented submission. A pending target is neither drawable
+    // nor externally leased; the other allocation may still be held by the UI.
+    struct PendingGpuFrame {
+        GpuSlot* target { nullptr };
+        std::unique_ptr<ScarletSkiaVulkan::Submission> submission;
+        uint64_t paintedPixels { 0 };
+        uint64_t generation { 0 };
+        MonotonicTime submittedAt;
+        bool ready { false };
+    };
+    std::optional<PendingGpuFrame> pendingGpuFrame;
+#endif
     uint64_t nextImageIdentifier { 0 };
     ScarletSkiaVulkan::Surface* surface { nullptr };
 #else
@@ -336,13 +353,14 @@ void reportProfile(ScarletWebView& view, MonotonicTime end)
         return;
     const auto& c = profile.counters;
     auto printable = [](uint64_t value) { return static_cast<unsigned long long>(value); };
-    std::fprintf(stderr, "SCARLET_WEBVIEW_PROFILE view=%p size=%ux%u period_us=%llu attempts=%llu failed_submits=%llu full=%llu layout=%llu explicit_full=%llu dirty_fallback=%llu slot_full=%llu painted_pixels=%llu paint_layout_us=%llu record_us=%llu submit_us=%llu max_paint_us=%llu ticks=%llu tick_us=%llu max_tick_us=%llu runloop_us=%llu rendering_update_us=%llu rendering_finalize_us=%llu scene_flush_us=%llu complete_requests=%llu complete_request_us=%llu max_complete_request_us=%llu\n",
+    std::fprintf(stderr, "SCARLET_WEBVIEW_PROFILE view=%p size=%ux%u period_us=%llu attempts=%llu failed_submits=%llu full=%llu layout=%llu explicit_full=%llu dirty_fallback=%llu slot_full=%llu painted_pixels=%llu paint_layout_us=%llu record_us=%llu submit_us=%llu max_paint_us=%llu ticks=%llu tick_us=%llu max_tick_us=%llu runloop_us=%llu rendering_update_us=%llu rendering_finalize_us=%llu scene_flush_us=%llu complete_requests=%llu complete_request_us=%llu max_complete_request_us=%llu gpu_completions=%llu gpu_completion_us=%llu max_gpu_completion_us=%llu\n",
         static_cast<void*>(&view), view.width, view.height, printable(profileMicroseconds(profile.periodStart, end)),
         printable(c.attempts), printable(c.failedSubmits), printable(c.full), printable(c.layout), printable(c.explicitFull),
         printable(c.dirtyFallback), printable(c.slotFull), printable(c.pixels), printable(c.paintLayoutMicros),
         printable(c.recordMicros), printable(c.submitMicros), printable(c.maxPaintMicros), printable(c.ticks),
         printable(c.tickMicros), printable(c.maxTickMicros), printable(c.runLoopMicros), printable(c.renderingUpdateMicros),
-        printable(c.renderingFinalizeMicros), printable(c.sceneFlushMicros), printable(c.requests), printable(c.requestMicros), printable(c.maxRequestMicros));
+        printable(c.renderingFinalizeMicros), printable(c.sceneFlushMicros), printable(c.requests), printable(c.requestMicros), printable(c.maxRequestMicros),
+        printable(c.gpuCompletions), printable(c.gpuCompletionMicros), printable(c.maxGpuCompletionMicros));
     profile.counters = { };
     profile.periodStart = end;
 }
@@ -430,6 +448,58 @@ void recordPaintProfile(ScarletWebView& view, const IntRect& damage, bool needed
 #endif
 
 #if USE(COORDINATED_GRAPHICS)
+void discardPendingGpuFrame(ScarletWebView& view)
+{
+    if (!view.pendingGpuFrame)
+        return;
+    auto* target = view.pendingGpuFrame->target;
+    // Submission destruction drains only when it has not actually completed.
+    // Do this before changing page/layer ownership or freeing output surfaces.
+    view.pendingGpuFrame.reset();
+    target->pendingSceneDamage.reset();
+    view.surface = nullptr;
+    view.layerTree->discardPendingPresentationCallbacks();
+}
+
+int32_t completePendingGpuFrame(ScarletWebView& view)
+{
+    if (!view.pendingGpuFrame || view.pendingGpuFrame->ready)
+        return SWV_OK;
+    auto& pending = *view.pendingGpuFrame;
+    auto device = PlatformDisplay::sharedDisplay().skiaVulkanContext();
+    auto status = device ? device->submissionStatus(*pending.submission) : ScarletSkiaVulkan::SubmissionStatus::Failed;
+    if (status == ScarletSkiaVulkan::SubmissionStatus::Pending)
+        return SWV_EMPTY;
+    if (status == ScarletSkiaVulkan::SubmissionStatus::Failed) {
+        discardPendingGpuFrame(view);
+        view.loadState.needsPaint = true;
+        view.loadState.needsRenderingUpdate = true;
+        view.loadState.error = "WebCore Vulkan layer submission failed."_s;
+        return SWV_FAILED;
+    }
+
+    auto completedAt = MonotonicTime::now();
+    pending.submission.reset(); // Finished: no synchronous GPU wait.
+    pending.ready = true;
+    // Only this allocation caught up to the submitted scene. New scene changes
+    // remain on their retained layers and fan out during the next paint.
+    pending.target->pendingSceneDamage.emplace(IntSize { static_cast<int>(view.width), static_cast<int>(view.height) });
+    ++view.paintStatistics.paints;
+    view.paintStatistics.painted_pixels += pending.paintedPixels;
+    pending.generation = ++view.generation;
+    if (view.paintProfile.enabled) {
+        auto elapsed = profileMicroseconds(pending.submittedAt, completedAt);
+        auto& counters = view.paintProfile.counters;
+        addProfileCounter(counters.gpuCompletions, 1);
+        addProfileCounter(counters.gpuCompletionMicros, elapsed);
+        counters.maxGpuCompletionMicros = std::max(counters.maxGpuCompletionMicros, elapsed);
+        reportProfile(view, completedAt);
+    }
+    view.layerTree->didSubmit(completedAt);
+    view.page->didCompleteRenderingFrame();
+    return SWV_OK;
+}
+
 int32_t paintCoordinated(ScarletWebView& view)
 {
     RefPtr frameView = view.frame->view();
@@ -509,12 +579,14 @@ int32_t paintCoordinated(ScarletWebView& view)
         paintedPixels += static_cast<uint64_t>(rect.width()) * rect.height();
     }
     auto device = PlatformDisplay::sharedDisplay().skiaVulkanContext();
-    bool submitted = device && device->submit(*view.surface);
-    auto submittedAt = MonotonicTime::now();
+    auto submittedAt = view.paintProfile.enabled ? MonotonicTime::now() : MonotonicTime { };
+    auto submission = device ? device->submitAsync(*view.surface) : nullptr;
+    bool submitted = submission && device->submissionStatus(*submission) != ScarletSkiaVulkan::SubmissionStatus::Failed;
+    auto submitReturnedAt = view.paintProfile.enabled ? MonotonicTime::now() : MonotonicTime { };
     if (view.paintProfile.enabled)
         recordPaintProfile(view, IntRect { IntPoint { }, cssSize(view) }, neededLayout, explicitFullPaint,
             false, !priorTargetDamage, submitted, profileStart, profileLayoutEnd, profileRecordStart, profileRecordEnd,
-            submittedAt, paintedPixels);
+            submitReturnedAt, paintedPixels);
     view.page->didCompleteRenderingUpdateDisplay();
     if (!submitted) {
         // A failed target is no longer trusted. The other slot still owns the
@@ -526,14 +598,15 @@ int32_t paintCoordinated(ScarletWebView& view)
         return SWV_FAILED;
     }
 
-    // Only this allocation has caught up; leased outputs remain immutable.
-    target->pendingSceneDamage.emplace(deviceSize);
-    ++view.paintStatistics.paints;
-    view.paintStatistics.painted_pixels += paintedPixels;
-    ++view.generation;
-    view.layerTree->didSubmit(submittedAt);
-    view.page->didCompleteRenderingFrame();
-    return SWV_OK;
+    // Even an immediately finished submission first enters this reserved state.
+    // Publication, generation advancement and media feedback happen only after
+    // the owner has observed successful GPU completion.
+    view.pendingGpuFrame.emplace();
+    view.pendingGpuFrame->target = target;
+    view.pendingGpuFrame->submission = std::move(submission);
+    view.pendingGpuFrame->paintedPixels = paintedPixels;
+    view.pendingGpuFrame->submittedAt = submittedAt;
+    return SWV_EMPTY;
 }
 #endif
 
@@ -914,6 +987,9 @@ extern "C" int32_t scarlet_webview_destroy(ScarletWebView* view)
     auto status = viewStatus(view);
     if (status != SWV_OK)
         return status;
+#if USE(COORDINATED_GRAPHICS)
+    discardPendingGpuFrame(*view);
+#endif
     traceTeardown("before-stop-loaders");
     view->frame->loader().stopAllLoaders();
     traceTeardown("after-stop-loaders");
@@ -949,6 +1025,9 @@ extern "C" int32_t scarlet_webview_navigate(ScarletWebView* view, SWVBytes urlBy
         return SWV_INVALID_ARGUMENT;
     if (!url.protocolIsInHTTPFamily() && !url.protocolIsData() && !url.isAboutBlank())
         return SWV_UNSUPPORTED;
+#if USE(COORDINATED_GRAPHICS)
+    discardPendingGpuFrame(*view);
+#endif
     screenForView(*view);
     view->loadState.error = { };
     view->loadState.needsPaint = true;
@@ -968,6 +1047,9 @@ extern "C" int32_t scarlet_webview_resize(ScarletWebView* view, uint32_t width, 
         return SWV_INVALID_ARGUMENT;
     if (view->width == width && view->height == height && view->scale == scale)
         return SWV_OK;
+#if USE(COORDINATED_GRAPHICS)
+    discardPendingGpuFrame(*view);
+#endif
     view->width = width;
     view->height = height;
     view->scale = scale;
@@ -995,6 +1077,9 @@ extern "C" int32_t scarlet_webview_reload(ScarletWebView* view)
     auto status = viewStatus(view);
     if (status != SWV_OK)
         return status;
+#if USE(COORDINATED_GRAPHICS)
+    discardPendingGpuFrame(*view);
+#endif
     view->loadState.needsPaint = true;
     view->loadState.fullPaint = true;
     view->frame->loader().reload({ }, true);
@@ -1008,6 +1093,9 @@ extern "C" int32_t scarlet_webview_back(ScarletWebView* view)
         return status;
     if (!view->page->backForward().canGoBackOrForward(-1))
         return SWV_EMPTY;
+#if USE(COORDINATED_GRAPHICS)
+    discardPendingGpuFrame(*view);
+#endif
     view->loadState.needsPaint = true;
     view->loadState.fullPaint = true;
     return view->page->backForward().goBack() ? SWV_OK : SWV_FAILED;
@@ -1020,6 +1108,9 @@ extern "C" int32_t scarlet_webview_forward(ScarletWebView* view)
         return status;
     if (!view->page->backForward().canGoBackOrForward(1))
         return SWV_EMPTY;
+#if USE(COORDINATED_GRAPHICS)
+    discardPendingGpuFrame(*view);
+#endif
     view->loadState.needsPaint = true;
     view->loadState.fullPaint = true;
     return view->page->backForward().goForward() ? SWV_OK : SWV_FAILED;
@@ -1063,6 +1154,10 @@ extern "C" int32_t scarlet_webview_tick(ScarletWebView* view)
         return status;
 #if USE(SKIA)
     ProfileOperation profile(*view, ProfileOperation::Kind::Tick);
+#endif
+#if USE(COORDINATED_GRAPHICS)
+    if (completePendingGpuFrame(*view) == SWV_FAILED)
+        return SWV_FAILED;
 #endif
     screenForView(*view);
     {
@@ -1121,7 +1216,7 @@ extern "C" int32_t scarlet_webview_needs_paint(ScarletWebView* view, uint32_t* o
     RefPtr frameView = view->frame->view();
     *out = view->loadState.needsPaint || !view->surface || (frameView && frameView->needsLayout())
 #if USE(COORDINATED_GRAPHICS)
-        || view->layerTree->needsComposition()
+        || view->pendingGpuFrame.has_value() || view->layerTree->needsComposition()
 #endif
         ;
     return SWV_OK;
@@ -1159,6 +1254,15 @@ extern "C" int32_t scarlet_webview_gpu_frame_capacity(ScarletWebView* view, uint
     if (!out) return SWV_INVALID_ARGUMENT;
 #if USE(SKIA)
     *out = 0;
+#if USE(COORDINATED_GRAPHICS)
+    if (view->pendingGpuFrame) {
+        auto completion = completePendingGpuFrame(*view);
+        if (completion == SWV_FAILED)
+            return completion;
+        *out = view->pendingGpuFrame->ready ? 1 : 0;
+        return SWV_OK;
+    }
+#endif
     for (const auto& slot : view->gpuSlots) if (!slot.lease) ++*out;
     return SWV_OK;
 #else
@@ -1172,6 +1276,22 @@ extern "C" int32_t scarlet_webview_gpu_frame(ScarletWebView* view, SWVGpuFrame* 
     if (!out) return SWV_INVALID_ARGUMENT;
     *out = { -1, 0, 0, 0, 0 };
 #if USE(SKIA)
+#if USE(COORDINATED_GRAPHICS)
+    if (view->pendingGpuFrame) {
+        status = completePendingGpuFrame(*view);
+        if (status != SWV_OK)
+            return status;
+        auto& pending = *view->pendingGpuFrame;
+        auto& slot = *pending.target;
+        auto handle = slot.surface->duplicateHandle();
+        if (handle < 0)
+            return SWV_FAILED;
+        slot.lease = pending.generation;
+        *out = { handle, slot.width, slot.height, 1, slot.lease };
+        view->pendingGpuFrame.reset();
+        return SWV_OK;
+    }
+#endif
     RefPtr frameView = view->frame->view();
     if (view->surface && !view->loadState.needsPaint && frameView && !frameView->needsLayout()
 #if USE(COORDINATED_GRAPHICS)
