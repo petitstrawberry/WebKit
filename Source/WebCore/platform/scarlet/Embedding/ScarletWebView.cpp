@@ -411,7 +411,7 @@ void reportProfile(ScarletWebView& view, MonotonicTime end)
         printable(c.renderingFinalizeMicros), printable(c.sceneFlushMicros), printable(c.requests), printable(c.requestMicros), printable(c.maxRequestMicros),
         printable(c.gpuCompletions), printable(c.gpuCompletionMicros), printable(c.maxGpuCompletionMicros),
         media.video_count, media.width, media.height, printable(media.decoded_frames),
-        printable(media.dropped_frames), printable(media.presented_frames), mediaTimeBytes.data());
+        printable(media.dropped_frames), printable(media.presented_frames), reinterpret_cast<const char*>(mediaTimeBytes.data()));
     profile.counters = { };
     profile.periodStart = end;
 }
@@ -1295,6 +1295,25 @@ extern "C" int32_t scarlet_webview_pixels(ScarletWebView* view, SWVPixels* out)
         return SWV_FAILED;
     *out = { data, static_cast<size_t>(stride) * view->height, view->width, view->height, static_cast<uint32_t>(stride), 1, view->generation };
     return SWV_OK;
+#endif
+}
+
+extern "C" int32_t scarlet_webview_gpu_frame_state(ScarletWebView* view, uint32_t* out)
+{
+    if (out)
+        *out = 0;
+    auto status = viewStatus(view);
+    if (status != SWV_OK)
+        return status;
+    if (!out)
+        return SWV_INVALID_ARGUMENT;
+#if USE(COORDINATED_GRAPHICS)
+    // Pure owner-state observation: do not collect completion, tick or paint.
+    if (view->pendingGpuFrame)
+        *out = view->pendingGpuFrame->ready ? 2 : 1;
+    return SWV_OK;
+#else
+    return SWV_UNSUPPORTED;
 #endif
 }
 

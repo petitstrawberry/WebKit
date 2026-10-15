@@ -113,6 +113,10 @@ int32_t scarlet_webview_pixels(ScarletWebView*, SWVPixels*);
  * or immediately when discarding a never-presented frame. Tokens remain
  * valid across navigation and viewport changes. */
 typedef struct { int32_t handle; uint32_t width, height, format; uint64_t generation; } SWVGpuFrame;
+/* Pure owner-thread state: 0 none, 1 submitted/pending, 2 completed/ready.
+ * Does not collect GPU completion, run callbacks, tick or paint. Unsupported
+ * compositor profiles return SWV_UNSUPPORTED and write 0. */
+int32_t scarlet_webview_gpu_frame_state(ScarletWebView*, uint32_t*);
 int32_t scarlet_webview_gpu_frame_capacity(ScarletWebView*, uint32_t*);
 int32_t scarlet_webview_gpu_frame(ScarletWebView*, SWVGpuFrame*);
 /* Identifies the allocation of a currently leased GPU frame. Stable across
