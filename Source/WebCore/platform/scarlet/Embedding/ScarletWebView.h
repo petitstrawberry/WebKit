@@ -115,6 +115,10 @@ int32_t scarlet_webview_pixels(ScarletWebView*, SWVPixels*);
 typedef struct { int32_t handle; uint32_t width, height, format; uint64_t generation; } SWVGpuFrame;
 int32_t scarlet_webview_gpu_frame_capacity(ScarletWebView*, uint32_t*);
 int32_t scarlet_webview_gpu_frame(ScarletWebView*, SWVGpuFrame*);
+/* Identifies the allocation of a currently leased GPU frame. Stable across
+ * paints/returns on that allocation; fresh after reallocation. IDs are scoped
+ * to one view. A returned or unknown generation is SWV_STALE_REQUEST. */
+int32_t scarlet_webview_gpu_frame_image_id(ScarletWebView*, uint64_t generation, uint64_t* out_image_id);
 int32_t scarlet_webview_release_gpu_frame(ScarletWebView*, uint64_t generation);
 /* Diagnostic readback of one leased image for renderer contract tests.
  * Browser presentation never calls this. The returned pixels are view-owned. */

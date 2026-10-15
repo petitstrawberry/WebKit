@@ -105,9 +105,11 @@ struct ScarletWebView {
     struct GpuSlot {
         std::unique_ptr<ScarletSkiaVulkan::Surface> surface;
         uint64_t lease { 0 };
+        uint64_t imageIdentifier { 0 };
         uint32_t width { 0 }, height { 0 };
     };
     std::array<GpuSlot, 2> gpuSlots;
+    uint64_t nextImageIdentifier { 0 };
     ScarletSkiaVulkan::Surface* surface { nullptr };
 #else
     RefPtr<cairo_surface_t> surface;
@@ -128,6 +130,12 @@ struct ScarletWebView {
 };
 
 namespace {
+void traceTeardown(const char* stage)
+{
+    if (std::getenv("SCARLET_GC_DIAGNOSTICS"))
+        std::fprintf(stderr, "SCARLET_WEBVIEW_TEARDOWN stage=%s\n", stage);
+}
+
 pthread_mutex_t initializationMutex = PTHREAD_MUTEX_INITIALIZER;
 pthread_t owner;
 std::atomic<bool> initialized { false };
@@ -389,26 +397,44 @@ extern "C" int32_t scarlet_webview_shutdown()
         return status;
     if (!views.empty())
         return SWV_FAILED;
+    traceTeardown("before-close-storage");
     closeScarletStorage();
+    traceTeardown("after-close-storage");
 #if USE(SKIA)
     {
+        traceTeardown("before-vm-lock");
         JSC::JSLockHolder locker(commonVM());
+        traceTeardown("after-vm-lock");
+        traceTeardown("before-full-gc");
         commonVM().heap.collectNow(JSC::Sync, JSC::CollectionScope::Full);
+        traceTeardown("after-full-gc");
     }
+    traceTeardown("after-vm-lock-release");
 #endif
+    traceTeardown("before-runloop-cycle");
     WTF::RunLoop::cycle();
+    traceTeardown("after-runloop-cycle");
+    traceTeardown("before-publication-lock");
     pthread_mutex_lock(&initializationMutex);
     terminationVM = nullptr;
     pthread_mutex_unlock(&initializationMutex);
+    traceTeardown("after-publication-lock");
     // Native TLS releases m_clientData before its FontCache destructor. Stop
     // the real font timers while the current thread data still exists.
     auto& threadData = threadGlobalDataSingleton();
+    traceTeardown("before-thread-data-destroy");
     threadData.destroy();
+    traceTeardown("after-thread-data-destroy");
+    traceTeardown("before-shared-timer-stop");
     threadData.threadTimers().setSharedTimer(nullptr);
+    traceTeardown("after-shared-timer-stop");
 #if USE(SKIA)
+    traceTeardown("before-gpu-context-destroy");
     PlatformDisplay::destroySharedDisplay();
+    traceTeardown("after-gpu-context-destroy");
 #endif
     shutDown = true;
+    traceTeardown("shutdown-complete");
     return SWV_OK;
 }
 
@@ -520,14 +546,22 @@ extern "C" int32_t scarlet_webview_destroy(ScarletWebView* view)
     auto status = viewStatus(view);
     if (status != SWV_OK)
         return status;
+    traceTeardown("before-stop-loaders");
     view->frame->loader().stopAllLoaders();
+    traceTeardown("after-stop-loaders");
     unregisterScarletLivePage(*view->page);
     view->surface = nullptr;
     view->publishedPixels.clear();
+    traceTeardown("before-release-page");
     view->page = nullptr;
+    traceTeardown("after-release-page");
+    traceTeardown("before-release-frame");
     view->frame = nullptr;
+    traceTeardown("after-release-frame");
     views.erase(view);
+    traceTeardown("before-delete-view");
     delete view;
+    traceTeardown("after-delete-view");
     return SWV_OK;
 }
 
@@ -725,9 +759,15 @@ extern "C" int32_t scarlet_webview_gpu_frame(ScarletWebView* view, SWVGpuFrame* 
     for (auto& slot : view->gpuSlots) {
         if (slot.lease) continue;
         if (!slot.surface || slot.width != view->width || slot.height != view->height) {
+            if (view->nextImageIdentifier == UINT64_MAX) {
+                view->loadState.error = "Native GPU image identifiers exhausted."_s;
+                return SWV_FAILED;
+            }
+            slot.imageIdentifier = 0;
             slot.surface = nullptr;
             slot.surface = device->createSurface(view->width, view->height);
             if (!slot.surface) { view->loadState.error = "Native shared page image allocation failed."_s; return SWV_FAILED; }
+            slot.imageIdentifier = ++view->nextImageIdentifier;
             slot.width = view->width; slot.height = view->height;
         }
         view->surface = slot.surface.get();
@@ -745,6 +785,25 @@ extern "C" int32_t scarlet_webview_gpu_frame(ScarletWebView* view, SWVGpuFrame* 
     return SWV_UNSUPPORTED;
 #endif
 }
+extern "C" int32_t scarlet_webview_gpu_frame_image_id(ScarletWebView* view, uint64_t generation, uint64_t* out)
+{
+    if (out) *out = 0;
+    auto status = viewStatus(view);
+    if (status != SWV_OK) return status;
+    if (!out || !generation) return SWV_INVALID_ARGUMENT;
+#if USE(SKIA)
+    for (const auto& slot : view->gpuSlots) {
+        if (slot.lease != generation) continue;
+        if (!slot.surface || !slot.imageIdentifier) return SWV_FAILED;
+        *out = slot.imageIdentifier;
+        return SWV_OK;
+    }
+    return SWV_STALE_REQUEST;
+#else
+    return SWV_UNSUPPORTED;
+#endif
+}
+
 extern "C" int32_t scarlet_webview_release_gpu_frame(ScarletWebView* view, uint64_t generation)
 {
     auto status = viewStatus(view);
