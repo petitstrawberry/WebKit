@@ -113,7 +113,7 @@ struct ScarletLayerTree::Scene {
     double scale { 1 };
     uint64_t epoch { 0 }, imageIdentifier { 0 }, paintedPixels { 0 };
     unsigned pendingSlot { 0 };
-    bool animations { false };
+    bool animations { false }, hasPublished { false };
 };
 std::unique_ptr<ScarletLayerTree> ScarletLayerTree::create(Function<void()>&& schedule)
 {
@@ -211,6 +211,7 @@ void ScarletLayerTree::discardOutput()
         if (!m_scene) return;
         m_scene->submission = nullptr;
         m_scene->callbacks.clear();
+        m_scene->hasPublished = false;
         for (auto& slot : m_scene->slots) slot.damage.reset();
         std::lock_guard lock(m_output->mutex);
         m_output->pending = false;
@@ -335,6 +336,7 @@ void ScarletLayerTree::commit()
     scene.root->setTransform(transform);
     IntSize size = m_deviceViewport;
     if (scene.size != size || scene.scale != m_deviceScale || scene.epoch != m_epoch) {
+        scene.hasPublished = false;
         for (auto& slot : scene.slots) slot.damage.reset();
         std::lock_guard outputLock(m_output->mutex);
         for (auto& slot : m_output->slots) slot.ready = false;
@@ -360,6 +362,7 @@ void ScarletLayerTree::render()
             m_output->failed = true;
             return;
         }
+        scene.hasPublished = true;
         auto time = MonotonicTime::now();
         auto& target = scene.slots[scene.pendingSlot];
         target.damage.emplace(scene.size);
@@ -423,12 +426,12 @@ void ScarletLayerTree::render()
     }
     auto prior = target.damage;
     std::optional<Damage> delta { std::in_place, scene.size };
-    scene.animations = scene.root->paint(*target.surface->skSurface().getCanvas(), delta, prior, SK_ColorWHITE, &scene.callbacks);
+    scene.animations = scene.root->paint(*target.surface->skSurface().getCanvas(), delta, prior, SK_ColorWHITE, &scene.callbacks, scene.hasPublished);
     for (auto& slot : scene.slots) {
         if (!delta) slot.damage.reset();
         else if (slot.damage) slot.damage->add(*delta);
     }
-    if (prior && delta && prior->isEmpty() && delta->isEmpty()) {
+    if (scene.hasPublished && delta && delta->isEmpty()) {
         scene.callbacks.clear();
         std::lock_guard lock(m_output->mutex);
         m_output->slots[index].reserved = false;

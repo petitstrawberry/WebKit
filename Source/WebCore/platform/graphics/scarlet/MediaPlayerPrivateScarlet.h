@@ -67,7 +67,13 @@ public:
     void paint(GraphicsContext&, const FloatRect&) final;
     RefPtr<NativeImage> nativeImageForCurrentTime() final;
     ColorSpace colorSpace() final { return ColorSpace::SRGB(); }
-    bool hasAvailableVideoFrame() const final { return m_videoFrameSerial; }
+    bool hasAvailableVideoFrame() const final {
+#if USE(COORDINATED_GRAPHICS)
+        return m_image || m_framePump;
+#else
+        return !!m_image;
+#endif
+    }
     bool didPassCORSAccessCheck() const final { return m_passedCors; }
     bool ended() const final { return m_status.ended; }
     unsigned decodedFrameCount() const final;

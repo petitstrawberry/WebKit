@@ -692,6 +692,9 @@ struct MediaPlayerPrivateScarlet::VideoFramePump {
     {
         RELEASE_ASSERT(!isMainThread());
         if (!proxy->isValid()) return;
+        ScarletMediaStatus status { };
+        scarlet_media_session_status(session, &status);
+        timer.startOneShot(Seconds::fromMilliseconds(status.paused ? 100 : 8));
         ScarletMediaFrame frame { };
         if (scarlet_media_session_acquire_frame(session, &frame) <= 0) return;
         auto release = makeScopeExit([&] { scarlet_media_session_release_frame(session, frame.lease); });
@@ -917,7 +920,7 @@ void MediaPlayerPrivateScarlet::setPageIsVisible(bool visible)
 bool MediaPlayerPrivateScarlet::supportsAcceleratedRendering() const
 {
     auto player = m_player.get();
-    return m_videoFrameSerial && player && player->acceleratedCompositingEnabled();
+    return (m_image || m_framePump) && player && player->acceleratedCompositingEnabled();
 }
 
 void MediaPlayerPrivateScarlet::acceleratedRenderingStateChanged()
@@ -951,7 +954,7 @@ void MediaPlayerPrivateScarlet::clearCompositorFrame()
 bool MediaPlayerPrivateScarlet::pushFrameToCompositor()
 {
     auto player = m_player.get();
-    if (!m_visible || !m_session || !m_videoFrameSerial || !m_contentsBufferProxy
+    if (!m_visible || !m_session || (!m_image && !m_framePump) || !m_contentsBufferProxy
         || !m_contentsBufferProxy->isValid() || !player || !player->acceleratedCompositingEnabled()) {
         stopFramePump();
         return false;
@@ -973,7 +976,7 @@ bool MediaPlayerPrivateScarlet::pushFrameToCompositor()
         }
     }
     auto* pump = m_framePump.get();
-    loop->dispatch([pump] { pump->timer.startRepeating(Seconds::fromMilliseconds(8)); });
+    loop->dispatch([pump] { pump->timer.startOneShot(0_s); });
     return true;
 }
 #endif
@@ -982,6 +985,10 @@ void MediaPlayerPrivateScarlet::play()
 {
     if (m_session)
         scarlet_media_session_play(m_session);
+#if USE(COORDINATED_GRAPHICS)
+    if (auto* pump = m_framePump.get())
+        pump->runLoop->dispatch([pump] { pump->timer.startOneShot(0_s); });
+#endif
     wake();
 }
 void MediaPlayerPrivateScarlet::pause()
