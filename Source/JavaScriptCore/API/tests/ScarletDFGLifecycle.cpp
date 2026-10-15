@@ -14,6 +14,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <pthread.h>
 #include <sched.h>
 
@@ -220,13 +221,18 @@ static bool interruptLoop(JSGlobalContextRef context)
     auto result = JSEvaluateScript(context, script, nullptr, nullptr, 1, &exception);
     JSStringRelease(script);
     interrupt.done.store(true, std::memory_order_release);
-    pthread_join(thread, nullptr);
+    int joined = pthread_join(thread, nullptr);
+    if (joined) {
+        std::fprintf(stderr, "SCARLET_DFG_FAIL stage=interrupt-join status=%d\n", joined);
+        // A possibly live interrupter still owns VM and stack references.
+        std::abort();
+    }
     // A caught JS error or an arbitrary execution deadline cannot pass this:
     // termination is sent only after the infinite function executes that tier.
     bool passed = observedTier.load(std::memory_order_acquire)
         && interrupt.requested.load(std::memory_order_acquire)
         && !interrupt.timedOut.load(std::memory_order_acquire) && !result
-        && exception && JSValueIsStrictEqual(context, exception, termination);
+        && exception && toJS(toJS(context), exception) == toJS(toJS(context), termination);
     std::printf("SCARLET_DFG_%s stage=infinite-interrupt tier=%s observed=%u timeout=%u exception=%u\n",
         passed ? "PASS" : "FAIL", expectDFG ? "DFG" : "Baseline",
         observedTier.load(), interrupt.timedOut.load(), !!exception);
