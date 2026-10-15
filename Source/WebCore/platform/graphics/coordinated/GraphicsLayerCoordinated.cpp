@@ -155,6 +155,12 @@ void GraphicsLayerCoordinated::setPosition(const FloatPoint& position)
 
 void GraphicsLayerCoordinated::syncPosition(const FloatPoint& position)
 {
+#if PLATFORM(SCARLET)
+    // The native scene lives on the owner thread; no scrolling thread has
+    // applied this geometry already, so commit it through the regular setter.
+    setPosition(position);
+    return;
+#endif
     if (m_position == position)
         return;
 
@@ -177,6 +183,12 @@ void GraphicsLayerCoordinated::setBoundsOrigin(const FloatPoint& origin)
 
 void GraphicsLayerCoordinated::syncBoundsOrigin(const FloatPoint& origin)
 {
+#if PLATFORM(SCARLET)
+    // The native scene lives on the owner thread; no scrolling thread has
+    // applied this geometry already, so commit it through the regular setter.
+    setBoundsOrigin(origin);
+    return;
+#endif
     if (m_boundsOrigin == origin)
         return;
 
