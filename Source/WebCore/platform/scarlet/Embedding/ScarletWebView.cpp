@@ -1272,6 +1272,7 @@ extern "C" int32_t scarlet_webview_set_output_epoch(ScarletWebView* view, uint64
 }
 extern "C" int32_t scarlet_webview_gpu_frame_state(ScarletWebView* view, uint32_t* out)
 {
+    if (out) *out = 0;
     auto status = viewStatus(view);
     if (status != SWV_OK) return status;
     if (!out) return SWV_INVALID_ARGUMENT;
@@ -1317,6 +1318,7 @@ extern "C" int32_t scarlet_webview_gpu_frame(ScarletWebView* view, SWVGpuFrame* 
 }
 extern "C" int32_t scarlet_webview_gpu_frame_image_id(ScarletWebView* view, uint64_t generation, uint64_t* out)
 {
+    if (out) *out = 0;
     auto status = viewStatus(view);
     if (status != SWV_OK) return status;
     if (!out || !generation) return SWV_INVALID_ARGUMENT;
