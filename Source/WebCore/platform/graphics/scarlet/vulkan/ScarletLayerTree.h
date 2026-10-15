@@ -12,10 +12,12 @@
 #include <array>
 #include <atomic>
 #include <memory>
+#include <functional>
 #include <mutex>
 #include <wtf/Condition.h>
 #include <wtf/HashSet.h>
 #include <wtf/Lock.h>
+#include <wtf/MonotonicTime.h>
 #include <wtf/RunLoop.h>
 #include <wtf/WorkQueue.h>
 namespace WebCore {
@@ -50,6 +52,8 @@ public:
         bool live { true }, failed { false }, pending { false };
         uint64_t nextGeneration { 0 };
         Statistics counters;
+        std::function<void()> wake;
+        void notify();
     };
     static std::unique_ptr<ScarletLayerTree> create(Function<void()>&& scheduleRenderingUpdate);
     ~ScarletLayerTree();
@@ -95,6 +99,7 @@ private:
     std::unique_ptr<SkiaPaintingEngine> m_paintingEngine;
     std::shared_ptr<Output> m_output { std::make_shared<Output>() };
     struct Scene;
+    MonotonicTime m_nextFrame;
     std::unique_ptr<Scene> m_scene; // Only the compositor accesses its contents.
     HashSet<Ref<CoordinatedPlatformLayer>> m_layers; // Owner only.
     RefPtr<GraphicsLayer> m_rootLayer, m_overlayLayer;
@@ -110,7 +115,7 @@ private:
     Condition m_paintingCondition;
     TilePaintStatistics m_tilePaintStatistics WTF_GUARDED_BY_LOCK(m_paintingLock);
     std::atomic<unsigned> m_pendingTiles { 0 };
-    std::atomic<bool> m_compositionRequired { true }, m_detached { false };
+    std::atomic<bool> m_compositionRequired { true }, m_detached { false }, m_ownerCommitRequired { true }, m_wakeQueued { false };
 };
 }
 #endif

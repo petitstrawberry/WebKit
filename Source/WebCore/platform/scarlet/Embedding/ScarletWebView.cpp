@@ -1247,6 +1247,16 @@ extern "C" int32_t scarlet_webview_output_release(SWVCompositorOutput* output, u
     return SWV_UNSUPPORTED;
 #endif
 }
+extern "C" int32_t scarlet_webview_commit(ScarletWebView* view)
+{
+    auto status = viewStatus(view);
+    if (status != SWV_OK) return status;
+#if USE(COORDINATED_GRAPHICS)
+    return paintCoordinated(*view);
+#else
+    return SWV_UNSUPPORTED;
+#endif
+}
 extern "C" int32_t scarlet_webview_set_output_epoch(ScarletWebView* view, uint64_t epoch)
 {
     auto status = viewStatus(view);

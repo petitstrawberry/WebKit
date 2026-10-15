@@ -125,6 +125,7 @@ int32_t scarlet_webview_output_acquire(SWVCompositorOutput*, SWVGpuFrame*, uint6
 int32_t scarlet_webview_output_release(SWVCompositorOutput*, uint64_t generation);
 // Owner-only: tag subsequent scene commits for navigation filtering.
 int32_t scarlet_webview_set_output_epoch(ScarletWebView*, uint64_t epoch);
+int32_t scarlet_webview_commit(ScarletWebView*);
 int32_t scarlet_webview_gpu_frame_state(ScarletWebView*, uint32_t*);
 int32_t scarlet_webview_gpu_frame_capacity(ScarletWebView*, uint32_t*);
 int32_t scarlet_webview_gpu_frame(ScarletWebView*, SWVGpuFrame*);

@@ -29,6 +29,11 @@ ScarletLayerTree::Output::~Output()
     for (auto& slot : slots)
         if (slot.frame.handle >= 0) close(slot.frame.handle);
 }
+void ScarletLayerTree::Output::notify()
+{
+    std::lock_guard lock(mutex);
+    if (live && wake) wake();
+}
 int ScarletLayerTree::Output::acquire(Frame& out)
 {
     std::lock_guard lock(mutex);
@@ -53,6 +58,7 @@ int ScarletLayerTree::Output::release(uint64_t generation)
     for (auto& slot : slots) {
         if (slot.leased && slot.frame.generation == generation) {
             slot.leased = false;
+            if (wake) wake();
             return 0;
         }
     }
@@ -131,9 +137,22 @@ ScarletLayerTree::ScarletLayerTree(Function<void()>&& schedule)
         m_scene->root->setAnchorPoint({ 0, 0, 0 });
         m_scene->root->setMasksToBounds(true);
         m_scene->root->setDamagePropagationEnabled(true);
-        m_timer.startRepeating(Seconds::fromMilliseconds(8));
+
     });
     if (proxy) m_paintingEngine = SkiaPaintingEngine::create(proxy);
+    m_output->wake = [this, weak = std::weak_ptr<Output>(m_output), queue = m_workQueue.copyRef()] {
+        if (m_wakeQueued.exchange(true)) return;
+        queue->dispatch([this, weak] {
+            if (auto output = weak.lock()) {
+                std::lock_guard lock(output->mutex);
+                if (output->live) {
+                    m_wakeQueued = false;
+                    if (!m_detached && !m_timer.isActive())
+                        m_timer.startOneShot(0_s);
+                }
+            }
+        });
+    };
 }
 ScarletLayerTree::~ScarletLayerTree() { detach(); }
 void ScarletLayerTree::assertIsOwner() const
@@ -219,21 +238,25 @@ Ref<CoordinatedImageBackingStore> ScarletLayerTree::imageBackingStore(Ref<Native
 }
 bool ScarletLayerTree::needsComposition() const
 {
-    return !m_detached && m_compositionRequired;
+    return !m_detached && m_ownerCommitRequired;
 }
 void ScarletLayerTree::notifyCompositionRequired()
 {
     assertIsOwner();
     if (m_detached) return;
     m_compositionRequired = true;
+    m_ownerCommitRequired = true;
     m_scheduleRenderingUpdate();
 }
 void ScarletLayerTree::requestComposition(CompositionReason reason)
 {
     if (m_detached) return;
     m_compositionRequired = true;
-    if (reason == CompositionReason::RenderingUpdate && isMainThread())
+    if (reason == CompositionReason::RenderingUpdate && isMainThread()) {
+        m_ownerCommitRequired = true;
         m_scheduleRenderingUpdate();
+    }
+    m_output->notify();
 }
 void ScarletLayerTree::willPaintTile() { assertIsOwner(); ++m_pendingTiles; }
 void ScarletLayerTree::didPaintTile()
@@ -242,6 +265,7 @@ void ScarletLayerTree::didPaintTile()
     RELEASE_ASSERT(m_pendingTiles);
     m_pendingTiles.fetch_sub(1, std::memory_order_release);
     m_compositionRequired = true;
+    m_output->notify();
     m_paintingCondition.notifyAll();
 }
 void ScarletLayerTree::didPaintTile(const IntRect& rect)
@@ -252,6 +276,7 @@ void ScarletLayerTree::didPaintTile(const IntRect& rect)
     RELEASE_ASSERT(m_pendingTiles);
     m_pendingTiles.fetch_sub(1, std::memory_order_release);
     m_compositionRequired = true;
+    m_output->notify();
     m_paintingCondition.notifyAll();
 }
 ScarletLayerTree::TilePaintStatistics ScarletLayerTree::tilePaintStatistics() const
@@ -281,6 +306,8 @@ bool ScarletLayerTree::flush(LocalFrameView& frameView)
         m_commitPending = true;
     }
     m_compositionRequired = true;
+    m_ownerCommitRequired = false;
+    m_output->notify();
     return true;
 }
 void ScarletLayerTree::commit()
@@ -326,7 +353,7 @@ void ScarletLayerTree::render()
     if (!device) return;
     if (scene.submission) {
         auto status = device->submissionStatus(*scene.submission);
-        if (status == ScarletSkiaVulkan::SubmissionStatus::Pending) return;
+        if (status == ScarletSkiaVulkan::SubmissionStatus::Pending) { m_timer.startOneShot(Seconds::fromMilliseconds(1)); return; }
         scene.submission = nullptr;
         if (status == ScarletSkiaVulkan::SubmissionStatus::Failed) {
             std::lock_guard lock(m_output->mutex);
@@ -356,6 +383,12 @@ void ScarletLayerTree::render()
     bool required = m_compositionRequired.exchange(false);
     commit();
     if ((!required && !scene.animations) || scene.size.isEmpty()) return;
+    auto now = MonotonicTime::now();
+    if (now < m_nextFrame) {
+        m_compositionRequired = true;
+        m_timer.startOneShot(m_nextFrame - now);
+        return;
+    }
     OptionSet<CompositionReason> reasons { CompositionReason::VideoFrame, CompositionReason::Animation };
     for (const auto& layer : scene.layers) layer->flushCompositingState(reasons);
     unsigned index = 2;
@@ -400,6 +433,7 @@ void ScarletLayerTree::render()
         std::lock_guard lock(m_output->mutex);
         m_output->slots[index].reserved = false;
         m_output->pending = false;
+        if (scene.animations) m_timer.startOneShot(Seconds { 1.0 / 60 });
         return;
     }
     Damage damage { scene.size, Damage::Mode::Full };
@@ -410,7 +444,9 @@ void ScarletLayerTree::render()
         scene.paintedPixels += static_cast<uint64_t>(rect.width()) * rect.height();
     }
     scene.pendingSlot = index;
+    m_nextFrame = MonotonicTime::now() + Seconds { 1.0 / 60 };
     scene.submission = device->submitAsync(*target.surface);
+    m_timer.startOneShot(Seconds::fromMilliseconds(1));
     if (!scene.submission) {
         std::lock_guard lock(m_output->mutex);
         m_output->failed = true;
