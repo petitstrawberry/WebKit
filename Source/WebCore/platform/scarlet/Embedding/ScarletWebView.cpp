@@ -826,6 +826,8 @@ extern "C" int32_t scarlet_webview_create(const SWVConfiguration* configuration,
     settings.setAcceleratedCompositingEnabled(true);
     settings.setForceCompositingMode(true);
     settings.setAcceleratedCompositingForFixedPositionEnabled(true);
+    // Split scroll contents into retained layers; input remains on the owner thread.
+    settings.setAsyncOverflowScrollingEnabled(true);
 #else
     settings.setAcceleratedCompositingEnabled(false);
 #endif
