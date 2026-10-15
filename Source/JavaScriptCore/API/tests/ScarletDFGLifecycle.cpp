@@ -4,6 +4,7 @@
 #include "config.h"
 #include "APICast.h"
 #include <JavaScriptCore/Exception.h>
+#include <JavaScriptCore/JSCellInlines.h>
 #include "InitializeThreading.h"
 #include "JSCConfig.h"
 #include "JSGlobalObject.h"
