@@ -19,6 +19,8 @@
 
 #include "config.h"
 #include <wtf/HashSet.h>
+#include <array>
+#include <cmath>
 #include "CoordinatedBackingStoreProxy.h"
 
 #if USE(COORDINATED_GRAPHICS)
@@ -141,7 +143,7 @@ OptionSet<CoordinatedBackingStoreProxy::UpdateResult> CoordinatedBackingStorePro
         );
 
     if (m_animatedBackingStoreClient)
-        m_animatedBackingStoreClient->update(layer.owner(), unscaledViewportRect, m_filterCover ? m_filterCover->bounds() : m_coverRect, unscaledSize, contentsScale);
+        m_animatedBackingStoreClient->update(layer.owner(), unscaledViewportRect, m_coverRect, unscaledSize, contentsScale);
 
     if (!m_tiles.isEmpty())
         invalidateRegion(dirtyRegion);
@@ -252,6 +254,36 @@ void CoordinatedBackingStoreProxy::invalidateRegion(const Vector<IntRect, 1>& di
     }
 }
 
+// Expand in double precision, intersect with real contents, then narrow.
+// In particular a tiny transform can request a billion-pixel input rectangle:
+// its prefetch expansion must not overflow before the contents intersection.
+static std::optional<std::array<int, 4>> boundedFilterTileBounds(
+    double left, double top, double right, double bottom, double growX, double growY,
+    const std::array<int, 4>& contents)
+{
+    const double clipLeft = contents[0], clipTop = contents[1];
+    const double clipRight = clipLeft + contents[2], clipBottom = clipTop + contents[3];
+    left = std::max(std::floor(left - growX), clipLeft);
+    top = std::max(std::floor(top - growY), clipTop);
+    right = std::min(std::ceil(right + growX), clipRight);
+    bottom = std::min(std::ceil(bottom + growY), clipBottom);
+    constexpr double min = std::numeric_limits<int>::min(), max = std::numeric_limits<int>::max();
+    if (!std::isfinite(left) || !std::isfinite(top) || !std::isfinite(right) || !std::isfinite(bottom)
+        || left < min || top < min || right > max || bottom > max
+        || right <= left || bottom <= top || right - left > max || bottom - top > max)
+        return std::nullopt;
+    return std::array<int, 4> { static_cast<int>(left), static_cast<int>(top),
+        static_cast<int>(right - left), static_cast<int>(bottom - top) };
+}
+static IntRect boundedFilterTileRect(const IntRect& rect, double scale, double growX, double growY, const IntRect& contents)
+{
+    auto bounds = boundedFilterTileBounds(rect.x() * scale, rect.y() * scale,
+        (static_cast<double>(rect.x()) + rect.width()) * scale,
+        (static_cast<double>(rect.y()) + rect.height()) * scale, growX, growY,
+        { contents.x(), contents.y(), contents.width(), contents.height() });
+    return bounds ? IntRect { (*bounds)[0], (*bounds)[1], (*bounds)[2], (*bounds)[3] } : IntRect { };
+}
+
 void CoordinatedBackingStoreProxy::createOrDestroyTiles(const IntRect& unscaledVisibleRect, const IntRect& unscaledContentsRect, const IntSize& unscaledViewportSize, float contentsScale, int maxTextureSize, Damage& damage, Vector<uint32_t>& tilesToCreate, Vector<uint32_t>& tilesToRemove, const Region* filterInputCoverage)
 {
     float coverAreaMultiplier = MemoryPressureHandler::singleton().isUnderMemoryPressure() ? 1.0f : 2.0f;
@@ -265,7 +297,7 @@ void CoordinatedBackingStoreProxy::createOrDestroyTiles(const IntRect& unscaledV
     if (filterInputCoverage) {
         inputCoverage.emplace();
         for (auto rect : filterInputCoverage->rects())
-            inputCoverage->unite(mapFromContents(rect));
+            inputCoverage->unite(boundedFilterTileRect(rect, contentsScale, 0, 0, contentsRect));
     }
     bool geometryChanged = contentsRectChanged || m_visibleRect != visibleRect || m_coverAreaMultiplier != coverAreaMultiplier
         || m_filterInputCoverage != inputCoverage;
@@ -337,15 +369,11 @@ void CoordinatedBackingStoreProxy::createOrDestroyTiles(const IntRect& unscaledV
         for (auto input : m_filterInputCoverage->rects()) {
             // Retain the existing viewport-derived tile size and prefetch
             // heuristic for each island, without covering the gap between them.
-            auto cover = input;
-            cover.inflateX(input.width() * (m_coverAreaMultiplier - 1) / 2);
-            cover.inflateY(input.height() * (m_coverAreaMultiplier - 1) / 2);
-            cover.intersect(m_contentsRect);
+            const auto cover = boundedFilterTileRect(input, 1,
+                input.width() * static_cast<double>(m_coverAreaMultiplier - 1) / 2,
+                input.height() * static_cast<double>(m_coverAreaMultiplier - 1) / 2, m_contentsRect);
             m_filterCover->unite(cover);
-            auto keep = cover;
-            keep.inflateX(m_tileSize.width() / 2);
-            keep.inflateY(m_tileSize.height() / 2);
-            keep.intersect(m_contentsRect);
+            const auto keep = boundedFilterTileRect(cover, 1, m_tileSize.width() / 2.0, m_tileSize.height() / 2.0, m_contentsRect);
             m_filterKeep->unite(keep);
         }
     }

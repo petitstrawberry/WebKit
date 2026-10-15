@@ -39,7 +39,7 @@
 #include "FloatQuad.h"
 #if PLATFORM(SCARLET)
 #include "FilterOperation.h"
-#include "FEGaussianBlur.h"
+#include <cmath>
 #endif
 #include "GraphicsLayerAsyncContentsDisplayDelegateCoordinated.h"
 #include "GraphicsLayerContentsDisplayDelegateCoordinated.h"
@@ -1008,24 +1008,34 @@ void GraphicsLayerCoordinated::clampToSizeIfRectIsInfinite(FloatRect& rect, cons
 }
 
 #if PLATFORM(SCARLET)
-// Keep separated shadow inputs separated. A bounding rectangle would raster
-// every empty tile between the viewport and a distant shadow source.
-static Region reverseFilterInput(Region region, const FilterOperations& filters)
+// Intermediate filter planes use floating-point components. Narrow only after
+// all ancestor filters have been reversed and the final input intersects this
+// backing store, so tiny transforms cannot overflow an integer region first.
+static void appendFilterInput(Vector<FloatRect>& inputs, const FloatRect& input, bool& unbounded)
+{
+    if (!std::isfinite(input.x()) || !std::isfinite(input.y()) || !std::isfinite(input.maxX()) || !std::isfinite(input.maxY())) {
+        unbounded = true;
+        return;
+    }
+    if (!input.isEmpty() && !inputs.contains(input))
+        inputs.append(input);
+}
+
+static Vector<FloatRect> reverseFilterInput(Vector<FloatRect> region, const FilterOperations& filters, bool& unbounded)
 {
     for (auto operation = filters.rbegin(); operation != filters.rend(); ++operation) {
-        IntSize blurOutset;
+        double halo = 0;
         FloatSize offset;
         bool shadow = false;
         switch ((*operation)->type()) {
-        case FilterOperation::Type::Blur: {
-            auto deviation = downcast<BlurFilterOperation>(operation->get()).stdDeviation();
-            blurOutset = FEGaussianBlur::calculateOutsetSize({ deviation, deviation });
+        case FilterOperation::Type::Blur:
+            // Match SkBlurImageFilter::kernelBounds, not the capped software
+            // FEGaussianBlur kernel. Skia reads ceil(3 * mapped sigma).
+            halo = std::ceil(3.0 * downcast<BlurFilterOperation>(operation->get()).stdDeviation());
             break;
-        }
         case FilterOperation::Type::DropShadow: {
             auto& drop = downcast<DropShadowFilterOperation>(operation->get());
-            float deviation = drop.stdDeviation();
-            blurOutset = FEGaussianBlur::calculateOutsetSize({ deviation, deviation });
+            halo = std::ceil(3.0 * drop.stdDeviation());
             offset = { -static_cast<float>(drop.x()), -static_cast<float>(drop.y()) };
             shadow = true;
             break;
@@ -1033,15 +1043,14 @@ static Region reverseFilterInput(Region region, const FilterOperations& filters)
         default:
             continue;
         }
-        Region inputs;
-        for (auto rect : region.rects()) {
+        Vector<FloatRect> inputs;
+        for (auto rect : region) {
             if (shadow)
-                inputs.unite(rect); // The preceding result also passes through.
-            FloatRect input(rect);
-            input.move(offset);
-            input.inflateX(blurOutset.width());
-            input.inflateY(blurOutset.height());
-            inputs.unite(enclosingIntRect(input));
+                appendFilterInput(inputs, rect, unbounded);
+            rect.move(offset);
+            rect.inflateX(halo);
+            rect.inflateY(halo);
+            appendFilterInput(inputs, rect, unbounded);
         }
         region = WTF::move(inputs);
     }
@@ -1057,33 +1066,48 @@ std::optional<Region> GraphicsLayerCoordinated::filterInputCoverage(const FloatR
     }
     if (filteredAncestors.isEmpty())
         return std::nullopt;
-
-    auto project = [](const Region& source, const TransformationMatrix& transform) {
-        Region result;
-        for (auto rect : source.rects())
-            result.unite(enclosingIntRect(transform.clampedBoundsOfProjectedQuad(FloatQuad(FloatRect(rect)))));
+    bool unbounded = false;
+    auto project = [&](const Vector<FloatRect>& source, const TransformationMatrix& transform) {
+        Vector<FloatRect> result;
+        for (auto rect : source)
+            appendFilterInput(result, transform.clampedBoundsOfProjectedQuad(FloatQuad(rect)), unbounded);
         return result;
     };
-    Region rootInput(enclosingIntRect(viewport));
+    Vector<FloatRect> rootInput { viewport };
     for (size_t index = filteredAncestors.size(); index; --index) {
         auto& layer = *filteredAncestors[index - 1];
         if (!layer.m_layerTransform.cachedInverse)
             return Region { };
-        auto input = reverseFilterInput(project(rootInput, *layer.m_layerTransform.cachedInverse), layer.m_filters);
+        auto input = reverseFilterInput(project(rootInput, *layer.m_layerTransform.cachedInverse), layer.m_filters, unbounded);
         auto next = project(input, layer.m_layerTransform.current.combined());
         if (layer.m_layerTransform.cachedFutureInverse && layer.m_layerTransform.cachedFutureInverse != layer.m_layerTransform.cachedInverse) {
-            auto futureInput = reverseFilterInput(project(rootInput, *layer.m_layerTransform.cachedFutureInverse), layer.m_filters);
-            next.unite(project(futureInput, layer.m_layerTransform.future.combined()));
+            auto futureInput = reverseFilterInput(project(rootInput, *layer.m_layerTransform.cachedFutureInverse), layer.m_filters, unbounded);
+            for (auto rect : project(futureInput, layer.m_layerTransform.future.combined()))
+                appendFilterInput(next, rect, unbounded);
         }
         rootInput = WTF::move(next);
     }
     if (!m_layerTransform.cachedInverse)
         return Region { };
     auto input = project(rootInput, *m_layerTransform.cachedInverse);
-    if (m_layerTransform.cachedFutureInverse && m_layerTransform.cachedFutureInverse != m_layerTransform.cachedInverse)
-        input.unite(project(rootInput, *m_layerTransform.cachedFutureInverse));
-    return input;
+    if (m_layerTransform.cachedFutureInverse && m_layerTransform.cachedFutureInverse != m_layerTransform.cachedInverse) {
+        for (auto rect : project(rootInput, *m_layerTransform.cachedFutureInverse))
+            appendFilterInput(input, rect, unbounded);
+    }
+    const FloatRect contents { FloatPoint { }, m_size };
+    if (unbounded)
+        return Region { enclosingIntRect(contents) };
+    Region result;
+    for (auto rect : input) {
+        // This is the final source plane, after every required halo/offset.
+        // Clipping here discards no pixels owned by this backing store.
+        rect.intersect(contents);
+        if (!rect.isEmpty())
+            result.unite(enclosingIntRect(rect));
+    }
+    return result;
 }
+
 #endif
 
 void GraphicsLayerCoordinated::updateVisibleRect(const FloatRect& rect)
