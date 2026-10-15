@@ -12,6 +12,10 @@
 #include "ResourceRequest.h"
 #include "ResourceResponse.h"
 #include "SkiaGpuContext.h"
+#if USE(COORDINATED_GRAPHICS)
+#include "CoordinatedPlatformLayerBufferProxy.h"
+#include "CoordinatedPlatformLayerBufferSkiaImage.h"
+#endif
 #if ENABLE(MEDIA_SOURCE)
 #include "MediaSourcePrivateScarlet.h"
 #endif
@@ -226,12 +230,18 @@ void MediaPlayerPrivateScarlet::cancelLoad()
     m_tracks.clear();
     m_buffered.clear();
     m_seekable.clear();
+#if USE(COORDINATED_GRAPHICS)
+    clearCompositorFrame();
+#endif
     m_image = nullptr;
     m_size = { };
     m_videoFrameSerial = m_paintedVideoFrameSerial = m_presentedVideoFrames = 0;
     m_frameMediaTime = 0;
     m_videoFrameMetadata.reset();
     m_notifiedFirstVideoFrame = false;
+#if USE(COORDINATED_GRAPHICS)
+    m_contentsBufferProxy = nullptr;
+#endif
     // Metadata gathering is a client request. MediaPlayer may start it before
     // invoking load(), so preserve that request across cancel/reload.
     m_status = { };
@@ -342,6 +352,9 @@ void MediaPlayerPrivateScarlet::removeTrack(TrackID identifier)
     if (m_session)
         scarlet_media_session_remove_track(m_session, identifier);
     if (removedVideo) {
+#if USE(COORDINATED_GRAPHICS)
+        clearCompositorFrame();
+#endif
         m_image = nullptr;
         m_videoFrameMetadata.reset();
         m_size = { };
@@ -542,8 +555,12 @@ void MediaPlayerPrivateScarlet::updateFrame()
             m_notifiedFirstVideoFrame = true;
             player->firstVideoFrameAvailable();
         }
-        if (m_visible)
-            player->repaint();
+        if (m_visible) {
+#if USE(COORDINATED_GRAPHICS)
+            if (!pushFrameToCompositor())
+#endif
+                player->repaint();
+        }
     }
 }
 
@@ -586,25 +603,105 @@ void MediaPlayerPrivateScarlet::paint(GraphicsContext& context, const FloatRect&
     if (!m_image || context.paintingDisabled())
         return;
     context.drawNativeImage(*m_image, rectangle, FloatRect { FloatPoint { }, m_size });
-    if (m_paintedVideoFrameSerial == m_videoFrameSerial)
+    didPresentVideoFrame(m_videoFrameSerial, m_frameMediaTime, m_size, MonotonicTime::now());
+}
+
+void MediaPlayerPrivateScarlet::didPresentVideoFrame(uint64_t serial, double mediaTime, const FloatSize& size, MonotonicTime presentationTime)
+{
+    if (serial <= m_paintedVideoFrameSerial)
         return;
-    m_paintedVideoFrameSerial = m_videoFrameSerial;
+    m_paintedVideoFrameSerial = serial;
     ++m_presentedVideoFrames;
     if (!m_gatheringVideoFrameMetadata)
         return;
-    auto now = MonotonicTime::now().secondsSinceEpoch().seconds();
+    auto now = presentationTime.secondsSinceEpoch().seconds();
     m_videoFrameMetadata = VideoFrameMetadata {
         .presentationTime = now,
         .expectedDisplayTime = now,
-        .width = static_cast<unsigned>(m_size.width()),
-        .height = static_cast<unsigned>(m_size.height()),
-        .mediaTime = m_frameMediaTime,
+        .width = static_cast<unsigned>(size.width()),
+        .height = static_cast<unsigned>(size.height()),
+        .mediaTime = mediaTime,
         .presentedFrames = boundedFrameCount(m_presentedVideoFrames)
     };
     // Document keeps the VideoFrameCallbacks rendering step scheduled while
     // requests remain pending. This actual compositor submission is consumed
     // on the next step, without repainting the same image to make a callback.
 }
+
+void MediaPlayerPrivateScarlet::setPageIsVisible(bool visible)
+{
+    m_visible = visible;
+#if USE(COORDINATED_GRAPHICS)
+    if (visible)
+        pushFrameToCompositor();
+#endif
+}
+
+#if USE(COORDINATED_GRAPHICS)
+bool MediaPlayerPrivateScarlet::supportsAcceleratedRendering() const
+{
+    auto player = m_player.get();
+    return m_image && player && player->acceleratedCompositingEnabled();
+}
+
+void MediaPlayerPrivateScarlet::acceleratedRenderingStateChanged()
+{
+    pushFrameToCompositor();
+}
+
+void MediaPlayerPrivateScarlet::setPlatformLayerBufferProxy(Ref<CoordinatedPlatformLayerBufferProxy>&& proxy)
+{
+    m_contentsBufferProxy = WTF::move(proxy);
+    ++m_compositorProxyGeneration;
+    m_pushedVideoFrameSerial = 0;
+    pushFrameToCompositor();
+}
+
+RefPtr<CoordinatedPlatformLayerBufferProxy> MediaPlayerPrivateScarlet::platformLayerBufferProxy() const
+{
+    return m_contentsBufferProxy;
+}
+
+void MediaPlayerPrivateScarlet::clearCompositorFrame()
+{
+    ++m_videoPresentationGeneration;
+    m_pushedVideoFrameSerial = 0;
+    if (m_contentsBufferProxy && m_contentsBufferProxy->isValid())
+        m_contentsBufferProxy->setDisplayBuffer(nullptr);
+}
+
+bool MediaPlayerPrivateScarlet::pushFrameToCompositor()
+{
+    if (!m_visible || !m_image || !m_contentsBufferProxy || !m_contentsBufferProxy->isValid())
+        return false;
+    auto player = m_player.get();
+    if (!player || !player->acceleratedCompositingEnabled())
+        return false;
+    if (m_pushedVideoFrameSerial == m_videoFrameSerial)
+        return true;
+    auto image = m_image->platformImage();
+    auto* context = PlatformDisplay::sharedDisplay().skiaGrContext();
+    if (!image || !context || !image->isValid(context->asRecorder()))
+        return false;
+    // The scene and decoder image use the same owner and Ganesh context. This
+    // buffer owns the GPU image through actual composition and submit retirement.
+    auto buffer = makeUnique<CoordinatedPlatformLayerBufferSkiaImage>(WTF::move(image),
+        CoordinatedPlatformLayerBuffer::AlphaMode::Opaque, CoordinatedPlatformLayerBuffer::Rotation::None);
+    buffer->setPresentationCallback([weakThis = ThreadSafeWeakPtr { *this },
+        generation = m_videoPresentationGeneration, proxyGeneration = m_compositorProxyGeneration,
+        serial = m_videoFrameSerial, mediaTime = m_frameMediaTime, size = m_size](MonotonicTime time) {
+        if (auto player = weakThis.get(); player
+            && player->m_videoPresentationGeneration == generation
+            && player->m_compositorProxyGeneration == proxyGeneration
+            && player->m_contentsBufferProxy && player->m_contentsBufferProxy->isValid())
+            player->didPresentVideoFrame(serial, mediaTime, size, time);
+    });
+    m_pushedVideoFrameSerial = m_videoFrameSerial;
+    m_contentsBufferProxy->setDisplayBuffer(WTF::move(buffer));
+    return true;
+}
+#endif
+
 void MediaPlayerPrivateScarlet::play()
 {
     if (m_session)
@@ -696,6 +793,9 @@ Ref<MediaTimePromise> MediaPlayerPrivateScarlet::seekToTarget(const SeekTarget& 
     m_seekReadyForCompletion = false;
     m_seekTarget = target.time;
     scarlet_media_session_seek(m_session, target.time.toDouble());
+#if USE(COORDINATED_GRAPHICS)
+    clearCompositorFrame();
+#endif
     m_image = nullptr;
     m_videoFrameMetadata.reset();
 #if ENABLE(MEDIA_SOURCE)

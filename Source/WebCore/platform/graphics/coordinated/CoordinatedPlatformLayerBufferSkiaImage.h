@@ -45,11 +45,14 @@ public:
 #endif
     CoordinatedPlatformLayerBufferSkiaImage(sk_sp<SkImage>&&, AlphaMode, Rotation);
     virtual ~CoordinatedPlatformLayerBufferSkiaImage() = default;
+    void setPresentationCallback(Function<void(MonotonicTime)>&&);
+    Function<void(MonotonicTime)> takePresentationCallback() final;
 
 private:
     sk_sp<SkImage> skiaImage() override { return m_image; }
 
     sk_sp<SkImage> m_image;
+    Function<void(MonotonicTime)> m_presentationCallback;
 };
 
 } // namespace WebCore

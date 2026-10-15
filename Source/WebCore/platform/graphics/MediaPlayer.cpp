@@ -78,8 +78,11 @@
 #include "MediaStreamPrivate.h"
 #endif
 
-#if USE(GSTREAMER)
+#if USE(COORDINATED_GRAPHICS)
 #include "CoordinatedPlatformLayerBufferProxy.h"
+#endif
+
+#if USE(GSTREAMER)
 #include "MediaPlayerPrivateGStreamer.h"
 #if ENABLE(MEDIA_SOURCE)
 #include "MediaPlayerPrivateGStreamerMSE.h"
@@ -1831,6 +1834,7 @@ bool MediaPlayer::isGStreamerHolePunchingEnabled()
 {
     return protect(client())->isGStreamerHolePunchingEnabled();
 }
+#endif
 
 #if USE(COORDINATED_GRAPHICS)
 void MediaPlayer::setPlatformLayerBufferProxy(Ref<CoordinatedPlatformLayerBufferProxy>&& proxy)
@@ -1843,7 +1847,6 @@ RefPtr<CoordinatedPlatformLayerBufferProxy> MediaPlayer::platformLayerBufferProx
 {
     return m_private ? protect(m_private)->platformLayerBufferProxy() : nullptr;
 }
-#endif
 #endif
 
 String MediaPlayer::languageOfPrimaryAudioTrack() const

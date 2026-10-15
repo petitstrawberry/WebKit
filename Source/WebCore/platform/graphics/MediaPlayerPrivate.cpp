@@ -35,7 +35,7 @@
 #include "VideoFrameMetadata.h"
 #include <wtf/NativePromise.h>
 
-#if USE(GSTREAMER) && USE(COORDINATED_GRAPHICS)
+#if USE(COORDINATED_GRAPHICS)
 #include "CoordinatedPlatformLayerBufferProxy.h"
 #endif
 
@@ -122,7 +122,7 @@ OptionSet<MediaPlaybackTargetType> MediaPlayerPrivateInterface::supportedPlaybac
 }
 #endif
 
-#if USE(GSTREAMER) && USE(COORDINATED_GRAPHICS)
+#if USE(COORDINATED_GRAPHICS)
 void MediaPlayerPrivateInterface::setPlatformLayerBufferProxy(Ref<CoordinatedPlatformLayerBufferProxy>&&)
 {
 }

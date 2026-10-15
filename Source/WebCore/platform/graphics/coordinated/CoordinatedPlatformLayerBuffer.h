@@ -28,6 +28,8 @@
 #if USE(COORDINATED_GRAPHICS)
 #include "IntSize.h"
 #include <wtf/OptionSet.h>
+#include <wtf/Function.h>
+#include <wtf/MonotonicTime.h>
 
 #if USE(TEXTURE_MAPPER)
 #include "GLFence.h"
@@ -66,6 +68,10 @@ public:
     };
 
     virtual ~CoordinatedPlatformLayerBuffer() = default;
+
+    // Taken only when contents are actually drawn; invoked by the compositor
+    // after successful GPU submission, never merely when the buffer is queued.
+    virtual Function<void(MonotonicTime)> takePresentationCallback() { return { }; }
 
     Type type() const { return m_type; }
     const IntSize& size() const LIFETIME_BOUND { return m_size; }

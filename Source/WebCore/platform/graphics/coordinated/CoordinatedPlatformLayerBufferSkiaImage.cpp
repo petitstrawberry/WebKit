@@ -119,6 +119,16 @@ CoordinatedPlatformLayerBufferSkiaImage::CoordinatedPlatformLayerBufferSkiaImage
 {
 }
 
+void CoordinatedPlatformLayerBufferSkiaImage::setPresentationCallback(Function<void(MonotonicTime)>&& callback)
+{
+    m_presentationCallback = WTF::move(callback);
+}
+
+Function<void(MonotonicTime)> CoordinatedPlatformLayerBufferSkiaImage::takePresentationCallback()
+{
+    return std::exchange(m_presentationCallback, { });
+}
+
 } // namespace WebCore
 
 #endif // USE(COORDINATED_GRAPHICS) && USE(SKIA) && !USE(TEXTURE_MAPPER)

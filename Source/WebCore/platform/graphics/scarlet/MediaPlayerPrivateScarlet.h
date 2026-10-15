@@ -14,6 +14,7 @@
 #include <wtf/HashMap.h>
 #include <wtf/RunLoop.h>
 #include <wtf/ThreadSafeWeakPtr.h>
+#include <wtf/MonotonicTime.h>
 namespace WebCore {
 class MediaSourcePrivateScarlet;
 class ScarletMediaResourceClient;
@@ -43,7 +44,13 @@ public:
     FloatSize naturalSize() const final { return m_size; }
     bool hasVideo() const final { return m_status.has_video; }
     bool hasAudio() const final { return m_status.has_audio; }
-    void setPageIsVisible(bool visible) final { m_visible = visible; }
+    void setPageIsVisible(bool) final;
+#if USE(COORDINATED_GRAPHICS)
+    bool supportsAcceleratedRendering() const final;
+    void acceleratedRenderingStateChanged() final;
+    void setPlatformLayerBufferProxy(Ref<CoordinatedPlatformLayerBufferProxy>&&) final;
+    RefPtr<CoordinatedPlatformLayerBufferProxy> platformLayerBufferProxy() const final;
+#endif
     MediaTime duration() const final;
     MediaTime currentTime() const final;
     Ref<MediaTimePromise> seekToTarget(const SeekTarget&) final;
@@ -93,6 +100,11 @@ private:
     void releaseParserEvent();
     void updateBuffered();
     ScarletMediaStatus statusSnapshot() const;
+    void didPresentVideoFrame(uint64_t, double, const FloatSize&, MonotonicTime);
+#if USE(COORDINATED_GRAPHICS)
+    bool pushFrameToCompositor();
+    void clearCompositorFrame();
+#endif
 
     ThreadSafeWeakPtr<MediaPlayer> m_player;
     RunLoop::Timer m_timer;
@@ -100,6 +112,12 @@ private:
     ScarletMediaParser* m_parser { nullptr };
     RefPtr<PlatformMediaResource> m_resource;
     RefPtr<NativeImage> m_image;
+#if USE(COORDINATED_GRAPHICS)
+    RefPtr<CoordinatedPlatformLayerBufferProxy> m_contentsBufferProxy;
+    uint64_t m_pushedVideoFrameSerial { 0 };
+    uint64_t m_videoPresentationGeneration { 0 };
+    uint64_t m_compositorProxyGeneration { 0 };
+#endif
     uint64_t m_videoFrameSerial { 0 };
     uint64_t m_paintedVideoFrameSerial { 0 };
     uint64_t m_presentedVideoFrames { 0 };

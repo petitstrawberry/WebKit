@@ -109,7 +109,7 @@ class TextTrackRepresentation;
 class VideoFrame;
 class VideoTrackPrivate;
 
-#if USE(GSTREAMER) && USE(COORDINATED_GRAPHICS)
+#if USE(COORDINATED_GRAPHICS)
 class CoordinatedPlatformLayerBufferProxy;
 #endif
 
@@ -690,10 +690,10 @@ public:
 #if USE(GSTREAMER)
     void simulateAudioInterruption();
     bool isGStreamerHolePunchingEnabled();
+#endif
 #if USE(COORDINATED_GRAPHICS)
     void setPlatformLayerBufferProxy(Ref<CoordinatedPlatformLayerBufferProxy>&&);
     RefPtr<CoordinatedPlatformLayerBufferProxy> platformLayerBufferProxy() const;
-#endif
 #endif
 
     String languageOfPrimaryAudioTrack() const;

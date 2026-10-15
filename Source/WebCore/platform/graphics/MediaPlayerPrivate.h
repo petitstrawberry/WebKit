@@ -297,10 +297,10 @@ public:
 
 #if USE(GSTREAMER)
     virtual void simulateAudioInterruption() { }
+#endif
 #if USE(COORDINATED_GRAPHICS)
     virtual void setPlatformLayerBufferProxy(Ref<CoordinatedPlatformLayerBufferProxy>&&);
     virtual RefPtr<CoordinatedPlatformLayerBufferProxy> platformLayerBufferProxy() const;
-#endif
 #endif
 
     virtual String languageOfPrimaryAudioTrack() const { return emptyString(); }
