@@ -116,7 +116,18 @@ std::unique_ptr<CoordinatedPlatformLayerBufferSkiaImage> CoordinatedPlatformLaye
 CoordinatedPlatformLayerBufferSkiaImage::CoordinatedPlatformLayerBufferSkiaImage(sk_sp<SkImage>&& image, AlphaMode alphaMode, Rotation rotation)
     : CoordinatedPlatformLayerBuffer(Type::SkiaImage, { image->width(), image->height() }, alphaMode, rotation)
     , m_image(WTF::move(image))
+#if PLATFORM(SCARLET)
+    , m_imageRunLoop(RunLoop::currentSingleton())
+#endif
 {
+}
+
+CoordinatedPlatformLayerBufferSkiaImage::~CoordinatedPlatformLayerBufferSkiaImage()
+{
+#if PLATFORM(SCARLET)
+    if (&m_imageRunLoop.get() != &RunLoop::currentSingleton())
+        m_imageRunLoop->dispatch([image = WTF::move(m_image)]() mutable { image = nullptr; });
+#endif
 }
 
 void CoordinatedPlatformLayerBufferSkiaImage::setPresentationCallback(Function<void(MonotonicTime)>&& callback)

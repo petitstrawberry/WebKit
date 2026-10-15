@@ -61,7 +61,7 @@ RefPtr<SkiaGPUAtlas> SkiaGPUAtlas::create(const SkiaImageAtlasLayout& layout, Re
     if (!display.prepareSkiaContext() || layout.atlasSize().isEmpty())
         return nullptr;
     auto* context = display.skiaGrContext();
-    RELEASE_ASSERT(context->threadSafeProxy() == proxy);
+    RELEASE_ASSERT(proxy);
     const auto& size = layout.atlasSize();
     auto info = SkImageInfo::Make(size.width(), size.height(), kBGRA_8888_SkColorType, kPremul_SkAlphaType, SkColorSpace::MakeSRGB());
     auto surface = SkSurfaces::RenderTarget(context, skgpu::Budgeted::kYes, info);

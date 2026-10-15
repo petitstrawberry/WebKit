@@ -28,6 +28,7 @@
 #if USE(COORDINATED_GRAPHICS)
 #include <wtf/MainThread.h>
 #include <wtf/RefPtr.h>
+#include <wtf/Lock.h>
 #include <wtf/RunLoop.h>
 #include <wtf/ThreadSafeRefCounted.h>
 
@@ -49,7 +50,10 @@ public:
     ~CoordinatedPlatformLayerBufferProxy();
 
     void invalidate();
-    bool isValid() const { return !!m_layer; }
+    bool isValid() const { return !!protectedLayer(); }
+#if PLATFORM(SCARLET)
+    RefPtr<RunLoop> scarletCompositingRunLoop() const { return m_scarletRunLoop; }
+#endif
 
     void consumePendingBufferIfNeeded();
     void setInitialDisplayBuffer(std::unique_ptr<CoordinatedPlatformLayerBuffer>&&);
@@ -67,7 +71,12 @@ public:
 private:
     explicit CoordinatedPlatformLayerBufferProxy(Ref<CoordinatedPlatformLayer>&&);
 
+    RefPtr<CoordinatedPlatformLayer> protectedLayer() const;
+    mutable Lock m_layerLock;
     RefPtr<CoordinatedPlatformLayer> m_layer;
+#if PLATFORM(SCARLET)
+    RefPtr<RunLoop> m_scarletRunLoop;
+#endif
     std::unique_ptr<CoordinatedPlatformLayerBuffer> m_pendingBuffer WTF_GUARDED_BY_CAPABILITY(mainThread);
 #if ENABLE(VIDEO) && USE(GSTREAMER)
     RefPtr<RunLoop> m_compositingRunLoop;

@@ -40,6 +40,9 @@ Ref<CoordinatedPlatformLayerBufferProxy> CoordinatedPlatformLayerBufferProxy::cr
 
 CoordinatedPlatformLayerBufferProxy::CoordinatedPlatformLayerBufferProxy(Ref<CoordinatedPlatformLayer>&& layer)
     : m_layer(WTF::move(layer))
+#if PLATFORM(SCARLET)
+    , m_scarletRunLoop(m_layer->compositingRunLoop())
+#endif
 #if ENABLE(VIDEO) && USE(GSTREAMER_GL)
     , m_compositingRunLoop(m_layer->compositingRunLoop())
 #endif
@@ -54,10 +57,16 @@ CoordinatedPlatformLayerBufferProxy::~CoordinatedPlatformLayerBufferProxy()
 #endif
 }
 
+RefPtr<CoordinatedPlatformLayer> CoordinatedPlatformLayerBufferProxy::protectedLayer() const
+{
+    Locker locker { m_layerLock };
+    return m_layer;
+}
+
 void CoordinatedPlatformLayerBufferProxy::invalidate()
 {
     assertIsMainThread();
-    m_layer = nullptr;
+    { Locker locker { m_layerLock }; m_layer = nullptr; }
 #if ENABLE(VIDEO) && USE(GSTREAMER_GL)
     m_compositingRunLoop = nullptr;
 #endif
@@ -78,7 +87,7 @@ void CoordinatedPlatformLayerBufferProxy::consumePendingBufferIfNeeded()
     if (!m_pendingBuffer)
         return;
 
-    if (RefPtr layer = m_layer) {
+    if (RefPtr layer = protectedLayer()) {
         assertIsHeld(layer->lock());
         layer->setContentsBuffer(WTF::move(m_pendingBuffer));
     } else
@@ -87,7 +96,7 @@ void CoordinatedPlatformLayerBufferProxy::consumePendingBufferIfNeeded()
 
 void CoordinatedPlatformLayerBufferProxy::setDisplayBuffer(std::unique_ptr<CoordinatedPlatformLayerBuffer>&& buffer)
 {
-    RefPtr layer = m_layer;
+    RefPtr layer = protectedLayer();
     if (!layer)
         return;
 
@@ -101,7 +110,7 @@ void CoordinatedPlatformLayerBufferProxy::setDisplayBuffer(std::unique_ptr<Coord
 #if ENABLE(VIDEO) && USE(GSTREAMER_GL)
 void CoordinatedPlatformLayerBufferProxy::dropCurrentBufferWhilePreservingTexture(ShouldWait shouldWait)
 {
-    RefPtr layer = m_layer;
+    RefPtr layer = protectedLayer();
     if (!layer)
         return;
 
@@ -110,7 +119,7 @@ void CoordinatedPlatformLayerBufferProxy::dropCurrentBufferWhilePreservingTextur
         return;
 
     auto dropCurrentBuffer = [this, protectedThis = Ref { *this }] {
-        if (RefPtr layer = m_layer)
+        if (RefPtr layer = protectedLayer())
             layer->replaceCurrentContentsBufferWithCopy();
     };
 
@@ -131,7 +140,7 @@ void CoordinatedPlatformLayerBufferProxy::dropCurrentBufferWhilePreservingTextur
 #if !USE(TEXTURE_MAPPER)
 sk_sp<GrContextThreadSafeProxy> CoordinatedPlatformLayerBufferProxy::threadSafeGrContext() const
 {
-    RefPtr layer = m_layer;
+    RefPtr layer = protectedLayer();
     return layer ? layer->threadSafeGrContext() : nullptr;
 }
 #endif

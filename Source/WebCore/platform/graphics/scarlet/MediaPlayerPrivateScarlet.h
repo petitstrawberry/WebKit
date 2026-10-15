@@ -65,9 +65,9 @@ public:
     const PlatformTimeRanges& seekable() const final;
     bool didLoadingProgress() const final { return std::exchange(m_loadingProgress, false); }
     void paint(GraphicsContext&, const FloatRect&) final;
-    RefPtr<NativeImage> nativeImageForCurrentTime() final { return m_image; }
+    RefPtr<NativeImage> nativeImageForCurrentTime() final;
     ColorSpace colorSpace() final { return ColorSpace::SRGB(); }
-    bool hasAvailableVideoFrame() const final { return !!m_image; }
+    bool hasAvailableVideoFrame() const final { return m_videoFrameSerial; }
     bool didPassCORSAccessCheck() const final { return m_passedCors; }
     bool ended() const final { return m_status.ended; }
     unsigned decodedFrameCount() const final;
@@ -102,6 +102,10 @@ private:
     ScarletMediaStatus statusSnapshot() const;
     void didPresentVideoFrame(uint64_t, double, const FloatSize&, MonotonicTime);
 #if USE(COORDINATED_GRAPHICS)
+    struct VideoFramePump;
+    void stopFramePump();
+    std::unique_ptr<VideoFramePump> m_framePump;
+    uint64_t m_snapshotVideoFrameSerial { 0 };
     bool pushFrameToCompositor();
     void clearCompositorFrame();
 #endif

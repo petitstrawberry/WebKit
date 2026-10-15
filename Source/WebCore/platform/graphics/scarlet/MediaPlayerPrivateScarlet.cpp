@@ -30,6 +30,12 @@
 #include <cstdio>
 #include <cstdlib>
 #include <limits>
+#include <mutex>
+#include <skia/core/SkCanvas.h>
+#include <skia/core/SkSurface.h>
+#include <skia/gpu/ganesh/SkSurfaceGanesh.h>
+#include "SkiaUtilities.h"
+#include <wtf/threads/BinarySemaphore.h>
 #include <wtf/MonotonicTime.h>
 #include <wtf/text/CString.h>
 
@@ -315,6 +321,9 @@ void MediaPlayerPrivateScarlet::releaseParserEvent()
 
 void MediaPlayerPrivateScarlet::cancelLoad()
 {
+#if USE(COORDINATED_GRAPHICS)
+    stopFramePump();
+#endif
     m_timer.stop();
     ++m_seekGeneration;
     m_seekPromise.reset();
@@ -460,6 +469,9 @@ bool MediaPlayerPrivateScarlet::hasCapacity(TrackID track) const
 }
 void MediaPlayerPrivateScarlet::flushTrack(TrackID track)
 {
+#if USE(COORDINATED_GRAPHICS)
+    clearCompositorFrame();
+#endif
     if (m_session)
         scarlet_media_session_flush(m_session, track);
 }
@@ -636,19 +648,12 @@ static SkYUVColorSpace videoColorSpace(const ScarletMediaFrame& frame)
         return frame.full_range ? kBT2020_8bit_Full_SkYUVColorSpace : kBT2020_8bit_Limited_SkYUVColorSpace;
     return frame.full_range ? kJPEG_Full_SkYUVColorSpace : kRec601_Limited_SkYUVColorSpace;
 }
-void MediaPlayerPrivateScarlet::updateFrame()
+static sk_sp<SkImage> uploadVideoFrame(const ScarletMediaFrame& frame)
 {
-    if (!m_session)
-        return;
-    auto* profile = mediaPollProfile();
-    ScarletMediaFrame frame { };
-    if (profileMediaPollPhase(profile, MediaPollPhase::Acquire, [&] { return scarlet_media_session_acquire_frame(m_session, &frame); }) <= 0)
-        return;
-    auto release = makeScopeExit([&] { profileMediaPollPhase(profile, MediaPollPhase::Release, [&] { scarlet_media_session_release_frame(m_session, frame.lease); }); });
     if (!frame.width || !frame.height || frame.width > 16384 || frame.height > 16384
         || (frame.format != SCARLET_MEDIA_I420 && frame.format != SCARLET_MEDIA_NV12) || !prepareSkiaContext()) {
-        fail(MediaPlayer::NetworkState::DecodeError);
-        return;
+        
+        return nullptr;
     }
     auto* context = PlatformDisplay::sharedDisplay().skiaGrContext();
     auto configuration = frame.format == SCARLET_MEDIA_I420 ? SkYUVAInfo::PlaneConfig::kY_U_V : SkYUVAInfo::PlaneConfig::kY_UV;
@@ -661,18 +666,129 @@ void MediaPlayerPrivateScarlet::updateFrame()
         unsigned channels = i && frame.format == SCARLET_MEDIA_NV12 ? 2 : 1;
         if (!frame.planes[i] || frame.strides[i] < width * channels || frame.strides[i] > SIZE_MAX / height
             || frame.plane_sizes[i] < frame.strides[i] * height) {
-            fail(MediaPlayer::NetworkState::DecodeError);
-            return;
+            
+            return nullptr;
         }
         auto imageInfo = SkImageInfo::Make(width, height, channels == 2 ? kR8G8_unorm_SkColorType : kGray_8_SkColorType, kOpaque_SkAlphaType);
         planes[i].reset(imageInfo, frame.planes[i], frame.strides[i]);
     }
     auto pixmaps = SkYUVAPixmaps::FromExternalPixmaps(info, planes);
-    auto image = profileMediaPollPhase(profile, MediaPollPhase::Upload, [&] { return SkImages::TextureFromYUVAPixmaps(context, pixmaps, skgpu::Mipmapped::kNo, false, SkColorSpace::MakeSRGB()); });
+    auto image = SkImages::TextureFromYUVAPixmaps(context, pixmaps, skgpu::Mipmapped::kNo, false, SkColorSpace::MakeSRGB());
     if (!image) {
-        fail(MediaPlayer::NetworkState::DecodeError);
+        
+        return nullptr;
+    }
+    return image;
+}
+#if USE(COORDINATED_GRAPHICS)
+struct MediaPlayerPrivateScarlet::VideoFramePump {
+    struct Snapshot { uint64_t serial { 0 }; double mediaTime { 0 }; FloatSize size; bool failed { false }; };
+    Ref<RunLoop> runLoop;
+    RunLoop::Timer timer;
+    ScarletMediaSession* session;
+    Ref<CoordinatedPlatformLayerBufferProxy> proxy;
+    ThreadSafeWeakPtr<MediaPlayerPrivateScarlet> player;
+    Ref<RunLoop> owner;
+    uint64_t generation, proxyGeneration, serial;
+    std::mutex mutex;
+    Snapshot latest;
+    sk_sp<SkImage> image; // Compositor only.
+    VideoFramePump(RunLoop& loop, ScarletMediaSession* s, CoordinatedPlatformLayerBufferProxy& p,
+        MediaPlayerPrivateScarlet& media)
+        : runLoop(loop)
+        , timer(loop, "ScarletVideoFramePump"_s, this, &VideoFramePump::poll)
+        , session(s), proxy(p), player(media), owner(RunLoop::currentSingleton())
+        , generation(media.m_videoPresentationGeneration)
+        , proxyGeneration(media.m_compositorProxyGeneration), serial(media.m_videoFrameSerial)
+    { }
+    void poll()
+    {
+        RELEASE_ASSERT(!isMainThread());
+        if (!proxy->isValid()) return;
+        ScarletMediaFrame frame { };
+        if (scarlet_media_session_acquire_frame(session, &frame) <= 0) return;
+        auto release = makeScopeExit([&] { scarlet_media_session_release_frame(session, frame.lease); });
+        image = uploadVideoFrame(frame);
+        if (!image) { std::lock_guard lock(mutex); latest.failed = true; return; }
+        auto size = FloatSize { static_cast<float>(frame.width), static_cast<float>(frame.height) };
+        double mediaTime = frame.presentation_us / 1000000.0;
+        ++serial;
+        auto buffer = makeUnique<CoordinatedPlatformLayerBufferSkiaImage>(sk_sp { image },
+            CoordinatedPlatformLayerBuffer::AlphaMode::Opaque, CoordinatedPlatformLayerBuffer::Rotation::None);
+        buffer->setPresentationCallback([weak = player, owner = owner.copyRef(), generation = generation,
+            proxyGeneration = proxyGeneration, serial = serial, mediaTime, size](MonotonicTime time) mutable {
+            owner->dispatch([weak, generation, proxyGeneration, serial, mediaTime, size, time] {
+                if (auto media = weak.get(); media && media->m_videoPresentationGeneration == generation
+                    && media->m_compositorProxyGeneration == proxyGeneration)
+                    media->didPresentVideoFrame(serial, mediaTime, size, time);
+            });
+        });
+        proxy->setDisplayBuffer(WTF::move(buffer));
+        std::lock_guard lock(mutex);
+        latest = { serial, mediaTime, size, false };
+    }
+    Snapshot snapshot() { std::lock_guard lock(mutex); return latest; }
+    sk_sp<SkImage> snapshotForOwner(const sk_sp<GrContextThreadSafeProxy>& ownerProxy)
+    {
+        // Explicit canvas/video capture only. Normal video never makes this
+        // RGB snapshot or waits for the Page owner.
+        sk_sp<SkImage> result;
+        BinarySemaphore done;
+        runLoop->dispatch([&] {
+            if (image) {
+                auto* context = PlatformDisplay::sharedDisplay().skiaGrContext();
+                auto info = SkImageInfo::Make(image->width(), image->height(), kBGRA_8888_SkColorType, kPremul_SkAlphaType, SkColorSpace::MakeSRGB());
+                if (auto surface = SkSurfaces::RenderTarget(context, skgpu::Budgeted::kYes, info)) {
+                    surface->getCanvas()->drawImage(image, 0, 0);
+                    result = SkiaUtilities::createPromiseImageIfNeeded(surface->makeImageSnapshot(), ownerProxy);
+                }
+            }
+            done.signal();
+        });
+        done.wait();
+        return result;
+    }
+};
+void MediaPlayerPrivateScarlet::stopFramePump()
+{
+    if (!m_framePump) return;
+    auto pump = m_framePump.release();
+    BinarySemaphore done;
+    pump->runLoop->dispatch([pump, &done] {
+        pump->timer.stop();
+        delete pump;
+        done.signal();
+    });
+    done.wait();
+}
+#endif
+void MediaPlayerPrivateScarlet::updateFrame()
+{
+    if (!m_session)
+        return;
+#if USE(COORDINATED_GRAPHICS)
+    if (m_framePump) {
+        auto state = m_framePump->snapshot();
+        if (state.failed) { fail(MediaPlayer::NetworkState::DecodeError); return; }
+        if (state.serial > m_videoFrameSerial) {
+            m_videoFrameSerial = state.serial;
+            m_frameMediaTime = state.mediaTime;
+            if (m_size != state.size) {
+                m_size = state.size;
+                if (auto player = m_player.get()) player->sizeChanged();
+            }
+        }
         return;
     }
+#endif
+    auto* profile = mediaPollProfile();
+    ScarletMediaFrame frame { };
+    if (profileMediaPollPhase(profile, MediaPollPhase::Acquire, [&] { return scarlet_media_session_acquire_frame(m_session, &frame); }) <= 0)
+        return;
+    auto release = makeScopeExit([&] { profileMediaPollPhase(profile, MediaPollPhase::Release, [&] { scarlet_media_session_release_frame(m_session, frame.lease); }); });
+    auto* context = PlatformDisplay::sharedDisplay().skiaGrContext();
+    auto image = uploadVideoFrame(frame);
+    if (!image) { fail(MediaPlayer::NetworkState::DecodeError); return; }
     profileMediaPollPhase(profile, MediaPollPhase::Replace, [&] { m_image = NativeImage::create(WTF::move(image), context); });
     ++m_videoFrameSerial;
     m_frameMediaTime = frame.presentation_us / 1000000.0;
@@ -729,11 +845,28 @@ std::optional<VideoFrameMetadata> MediaPlayerPrivateScarlet::videoFrameMetadata(
 {
     return std::exchange(m_videoFrameMetadata, std::nullopt);
 }
+RefPtr<NativeImage> MediaPlayerPrivateScarlet::nativeImageForCurrentTime()
+{
+#if USE(COORDINATED_GRAPHICS)
+    if (m_framePump && m_snapshotVideoFrameSerial != m_videoFrameSerial) {
+        auto* context = PlatformDisplay::sharedDisplay().skiaGrContext();
+        if (context) {
+            if (auto image = m_framePump->snapshotForOwner(context->threadSafeProxy())) {
+                m_image = NativeImage::create(WTF::move(image), context);
+                m_snapshotVideoFrameSerial = m_videoFrameSerial;
+            }
+        }
+    }
+#endif
+    return m_image;
+}
+
 void MediaPlayerPrivateScarlet::paint(GraphicsContext& context, const FloatRect& rectangle)
 {
-    if (!m_image || context.paintingDisabled())
+    auto image = nativeImageForCurrentTime();
+    if (!image || context.paintingDisabled())
         return;
-    context.drawNativeImage(*m_image, rectangle, FloatRect { FloatPoint { }, m_size });
+    context.drawNativeImage(*image, rectangle, FloatRect { FloatPoint { }, m_size });
     didPresentVideoFrame(m_videoFrameSerial, m_frameMediaTime, m_size, MonotonicTime::now());
 }
 
@@ -763,6 +896,7 @@ void MediaPlayerPrivateScarlet::setPageIsVisible(bool visible)
 {
     m_visible = visible;
 #if USE(COORDINATED_GRAPHICS)
+    if (!visible) stopFramePump();
     if (visible)
         pushFrameToCompositor();
 #endif
@@ -772,7 +906,7 @@ void MediaPlayerPrivateScarlet::setPageIsVisible(bool visible)
 bool MediaPlayerPrivateScarlet::supportsAcceleratedRendering() const
 {
     auto player = m_player.get();
-    return m_image && player && player->acceleratedCompositingEnabled();
+    return m_videoFrameSerial && player && player->acceleratedCompositingEnabled();
 }
 
 void MediaPlayerPrivateScarlet::acceleratedRenderingStateChanged()
@@ -782,6 +916,7 @@ void MediaPlayerPrivateScarlet::acceleratedRenderingStateChanged()
 
 void MediaPlayerPrivateScarlet::setPlatformLayerBufferProxy(Ref<CoordinatedPlatformLayerBufferProxy>&& proxy)
 {
+    stopFramePump();
     m_contentsBufferProxy = WTF::move(proxy);
     ++m_compositorProxyGeneration;
     m_pushedVideoFrameSerial = 0;
@@ -795,6 +930,7 @@ RefPtr<CoordinatedPlatformLayerBufferProxy> MediaPlayerPrivateScarlet::platformL
 
 void MediaPlayerPrivateScarlet::clearCompositorFrame()
 {
+    stopFramePump();
     ++m_videoPresentationGeneration;
     m_pushedVideoFrameSerial = 0;
     if (m_contentsBufferProxy && m_contentsBufferProxy->isValid())
@@ -803,32 +939,29 @@ void MediaPlayerPrivateScarlet::clearCompositorFrame()
 
 bool MediaPlayerPrivateScarlet::pushFrameToCompositor()
 {
-    if (!m_visible || !m_image || !m_contentsBufferProxy || !m_contentsBufferProxy->isValid())
-        return false;
     auto player = m_player.get();
-    if (!player || !player->acceleratedCompositingEnabled())
+    if (!m_visible || !m_session || !m_videoFrameSerial || !m_contentsBufferProxy
+        || !m_contentsBufferProxy->isValid() || !player || !player->acceleratedCompositingEnabled()) {
+        stopFramePump();
         return false;
-    if (m_pushedVideoFrameSerial == m_videoFrameSerial)
-        return true;
-    auto image = m_image->platformImage();
-    auto* context = PlatformDisplay::sharedDisplay().skiaGrContext();
-    if (!image || !context || !image->isValid(context->asRecorder()))
-        return false;
-    // The scene and decoder image use the same owner and Ganesh context. This
-    // buffer owns the GPU image through actual composition and submit retirement.
-    auto buffer = makeUnique<CoordinatedPlatformLayerBufferSkiaImage>(WTF::move(image),
-        CoordinatedPlatformLayerBuffer::AlphaMode::Opaque, CoordinatedPlatformLayerBuffer::Rotation::None);
-    buffer->setPresentationCallback([weakThis = ThreadSafeWeakPtr { *this },
-        generation = m_videoPresentationGeneration, proxyGeneration = m_compositorProxyGeneration,
-        serial = m_videoFrameSerial, mediaTime = m_frameMediaTime, size = m_size](MonotonicTime time) {
-        if (auto player = weakThis.get(); player
-            && player->m_videoPresentationGeneration == generation
-            && player->m_compositorProxyGeneration == proxyGeneration
-            && player->m_contentsBufferProxy && player->m_contentsBufferProxy->isValid())
-            player->didPresentVideoFrame(serial, mediaTime, size, time);
-    });
-    m_pushedVideoFrameSerial = m_videoFrameSerial;
-    m_contentsBufferProxy->setDisplayBuffer(WTF::move(buffer));
+    }
+    if (m_framePump) return true;
+    auto loop = m_contentsBufferProxy->scarletCompositingRunLoop();
+    if (!loop) return false;
+    m_framePump = makeUnique<VideoFramePump>(*loop, m_session, *m_contentsBufferProxy, *this);
+    // Publish the initial owner image as a promise for the compositor context.
+    if (m_image) {
+        auto image = m_image->platformImage();
+        auto* context = PlatformDisplay::sharedDisplay().skiaGrContext();
+        auto info = SkImageInfo::Make(image->width(), image->height(), kBGRA_8888_SkColorType, kPremul_SkAlphaType, SkColorSpace::MakeSRGB());
+        if (auto surface = SkSurfaces::RenderTarget(context, skgpu::Budgeted::kYes, info)) {
+            surface->getCanvas()->drawImage(image, 0, 0);
+            auto buffer = CoordinatedPlatformLayerBufferSkiaImage::create(surface->makeImageSnapshot(), m_contentsBufferProxy->threadSafeGrContext());
+            m_contentsBufferProxy->setDisplayBuffer(WTF::move(buffer));
+        }
+    }
+    auto* pump = m_framePump.get();
+    loop->dispatch([pump] { pump->timer.startRepeating(Seconds::fromMilliseconds(8)); });
     return true;
 }
 #endif

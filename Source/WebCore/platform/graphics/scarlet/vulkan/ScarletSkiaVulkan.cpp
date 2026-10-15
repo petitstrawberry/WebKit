@@ -29,6 +29,7 @@
 #include <unistd.h>
 #include <thread>
 #include <cstdlib>
+#include <mutex>
 
 namespace WebCore {
 struct Dispatch {
@@ -136,18 +137,39 @@ private:
     uint64_t m_bytes { };
 };
 
+// Contexts remain thread confined. Only Vulkan device/queue lifetime is shared;
+// immutable textures can consequently be promised to the compositor context.
+static std::mutex queueMutex;
+static PFN_vkQueueSubmit queueSubmit;
+static PFN_vkQueueWaitIdle queueWaitIdle;
+static PFN_vkDeviceWaitIdle deviceWaitIdle;
+static VKAPI_ATTR VkResult VKAPI_CALL synchronizedQueueSubmit(VkQueue q, uint32_t n, const VkSubmitInfo* s, VkFence f)
+{ std::lock_guard lock(queueMutex); return queueSubmit(q, n, s, f); }
+static VKAPI_ATTR VkResult VKAPI_CALL synchronizedQueueWaitIdle(VkQueue q)
+{ std::lock_guard lock(queueMutex); return queueWaitIdle(q); }
+static VKAPI_ATTR VkResult VKAPI_CALL synchronizedDeviceWaitIdle(VkDevice d)
+{ std::lock_guard lock(queueMutex); return deviceWaitIdle(d); }
+struct SharedVulkanDevice {
+    void* library { };
+    Dispatch dispatch;
+    VkPhysicalDevice physical { };
+    VkQueue queue { };
+    uint32_t queueIndex { };
+    ~SharedVulkanDevice()
+    {
+        if (dispatch.device) dispatch.deviceFunction<PFN_vkDestroyDevice>("vkDestroyDevice")(dispatch.device, nullptr);
+        if (dispatch.instance) dispatch.instanceFunction<PFN_vkDestroyInstance>("vkDestroyInstance")(dispatch.instance, nullptr);
+        if (library) dlclose(library);
+    }
+};
 struct ScarletSkiaVulkan::State {
-public:
     ~State()
     {
         checkThread();
         context = nullptr;
         allocator = nullptr;
-        if (dispatch.device) dispatch.deviceFunction<PFN_vkDestroyDevice>("vkDestroyDevice")(dispatch.device, nullptr);
-        if (dispatch.instance) dispatch.instanceFunction<PFN_vkDestroyInstance>("vkDestroyInstance")(dispatch.instance, nullptr);
-        if (library) dlclose(library);
     }
-    void* library { };
+    std::shared_ptr<SharedVulkanDevice> shared;
     Dispatch dispatch;
     sk_sp<Allocator> allocator;
     sk_sp<GrDirectContext> context;
@@ -157,8 +179,7 @@ public:
     void checkThread() const { if (ownerThread != std::this_thread::get_id()) std::abort(); }
 };
 
-template<typename DeviceState>
-int initialize(DeviceState& owner)
+static int initializeDevice(SharedVulkanDevice& owner)
 {
     owner.library = dlopen("/lib/libvulkan.so.1", RTLD_NOW | RTLD_GLOBAL);
     if (!owner.library) { std::fprintf(stderr, "SKIA_VULKAN_FAIL loader: %s\n", dlerror()); return 1; }
@@ -208,10 +229,46 @@ int initialize(DeviceState& owner)
     dispatch.deviceFunction<PFN_vkGetDeviceQueue>("vkGetDeviceQueue")(dispatch.device, queueIndex, 0, &queue);
     owner.queue = queue;
     owner.queueIndex = queueIndex;
+    owner.physical = physical;
+    queueSubmit = dispatch.deviceFunction<PFN_vkQueueSubmit>("vkQueueSubmit");
+    queueWaitIdle = dispatch.deviceFunction<PFN_vkQueueWaitIdle>("vkQueueWaitIdle");
+    deviceWaitIdle = dispatch.deviceFunction<PFN_vkDeviceWaitIdle>("vkDeviceWaitIdle");
+    return 0;
+}
+static std::shared_ptr<SharedVulkanDevice> sharedDevice()
+{
+    static std::mutex mutex;
+    static std::weak_ptr<SharedVulkanDevice> device;
+    std::lock_guard lock(mutex);
+    if (auto existing = device.lock())
+        return existing;
+    auto created = std::make_shared<SharedVulkanDevice>();
+    if (initializeDevice(*created))
+        return nullptr;
+    device = created;
+    return created;
+}
+template<typename DeviceState>
+int initialize(DeviceState& owner)
+{
+    owner.shared = sharedDevice();
+    if (!owner.shared)
+        return 1;
+    auto dispatch = owner.shared->dispatch;
+    owner.dispatch = dispatch;
+    auto physical = owner.shared->physical;
+    auto queue = owner.shared->queue;
+    auto queueIndex = owner.shared->queueIndex;
+    owner.queue = queue;
+    owner.queueIndex = queueIndex;
+    const char* imageExtension = "VK_SGFX_scarlet_image";
     skgpu::VulkanBackendContext backend;
     backend.fInstance = dispatch.instance; backend.fPhysicalDevice = physical; backend.fDevice = dispatch.device;
     backend.fQueue = queue; backend.fGraphicsQueueIndex = queueIndex; backend.fMaxAPIVersion = VK_API_VERSION_1_1;
     backend.fGetProc = [dispatch](const char* name, VkInstance instance, VkDevice device) -> PFN_vkVoidFunction {
+        if (!std::strcmp(name, "vkQueueSubmit")) return reinterpret_cast<PFN_vkVoidFunction>(synchronizedQueueSubmit);
+        if (!std::strcmp(name, "vkQueueWaitIdle")) return reinterpret_cast<PFN_vkVoidFunction>(synchronizedQueueWaitIdle);
+        if (!std::strcmp(name, "vkDeviceWaitIdle")) return reinterpret_cast<PFN_vkVoidFunction>(synchronizedDeviceWaitIdle);
         auto function = device ? dispatch.deviceProc(device, name) : dispatch.instanceProc(instance, name);
         if (!function) std::fprintf(stderr, "SKIA_VULKAN_MISSING_PROC %s\n", name);
         return function;
@@ -371,7 +428,7 @@ std::unique_ptr<ScarletSkiaVulkan::Surface> ScarletSkiaVulkan::createSurface(uin
     GrVkImageInfo wrapped;
     m_state->allocator->getAllocInfo(state->memory, &wrapped.fAlloc);
     if (dispatch.deviceFunction<PFN_vkBindImageMemory>("vkBindImageMemory")(dispatch.device, state->image, wrapped.fAlloc.fMemory, wrapped.fAlloc.fOffset) != VK_SUCCESS) return nullptr;
-    if (dispatch.deviceFunction<PFN_vkQueueWaitIdle>("vkQueueWaitIdle")(m_state->queue) != VK_SUCCESS) return nullptr;
+    if (synchronizedQueueWaitIdle(m_state->queue) != VK_SUCCESS) return nullptr;
     using ExportImage = VkResult (*)(VkDevice, VkImage, int32_t*);
     auto exportImage = dispatch.deviceFunction<ExportImage>("vkGetImageScarletHandleSGFX");
     if (!exportImage || exportImage(dispatch.device, state->image, &state->exportedHandle) != VK_SUCCESS || state->exportedHandle < 0) return nullptr;

@@ -28,6 +28,9 @@
 #if USE(COORDINATED_GRAPHICS) && USE(SKIA) && !USE(TEXTURE_MAPPER)
 #include "CoordinatedPlatformLayerBuffer.h"
 #include <wtf/SharedTask.h>
+#if PLATFORM(SCARLET)
+#include <wtf/RunLoop.h>
+#endif
 
 WTF_IGNORE_WARNINGS_IN_THIRD_PARTY_CODE_BEGIN
 #include <skia/gpu/ganesh/GrContextThreadSafeProxy.h>
@@ -45,7 +48,7 @@ public:
     static std::unique_ptr<CoordinatedPlatformLayerBufferSkiaImage> create(Ref<CoordinatedWebGLTextureWrapper>&&, const IntSize&, AlphaMode, std::unique_ptr<GLFence>&&, const sk_sp<GrContextThreadSafeProxy>&);
 #endif
     CoordinatedPlatformLayerBufferSkiaImage(sk_sp<SkImage>&&, AlphaMode, Rotation);
-    virtual ~CoordinatedPlatformLayerBufferSkiaImage() = default;
+    virtual ~CoordinatedPlatformLayerBufferSkiaImage();
     void setPresentationCallback(Function<void(MonotonicTime)>&&);
     Function<void(MonotonicTime)> takePresentationCallback() final;
 
@@ -53,6 +56,9 @@ private:
     sk_sp<SkImage> skiaImage() override { return m_image; }
 
     sk_sp<SkImage> m_image;
+#if PLATFORM(SCARLET)
+    Ref<RunLoop> m_imageRunLoop;
+#endif
     RefPtr<SharedTask<void(MonotonicTime)>> m_presentationCallback;
 };
 

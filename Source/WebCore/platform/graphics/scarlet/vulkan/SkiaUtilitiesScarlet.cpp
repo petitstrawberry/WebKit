@@ -49,7 +49,6 @@ public:
     }
     sk_sp<GrPromiseImageTexture> fulfill()
     {
-        RELEASE_ASSERT(isMainThread());
         return GrPromiseImageTexture::Make(m_texture);
     }
 private:
@@ -62,9 +61,8 @@ sk_sp<SkImage> createPromiseImageIfNeeded(const sk_sp<SkImage>& image, const sk_
 {
     if (!image->isTextureBacked())
         return image;
-    RELEASE_ASSERT(isMainThread());
     auto* context = PlatformDisplay::sharedDisplay().skiaGrContext();
-    if (!context || !proxy || !image->isValid(context->asRecorder()) || context->threadSafeProxy() != proxy)
+    if (!context || !proxy || !image->isValid(context->asRecorder()))
         return image;
     GrBackendTexture texture;
     GrSurfaceOrigin origin;
@@ -72,6 +70,10 @@ sk_sp<SkImage> createPromiseImageIfNeeded(const sk_sp<SkImage>& image, const sk_
     // later owner DrawDDL is encoded after these writes in the same stream.
     if (!SkImages::GetBackendTextureFromImage(image.get(), &texture, true, &origin))
         return image; // GraphicsContextSkia marks this as owner-only replay.
+    // Different contexts share a device, but not a Ganesh command stream.
+    // Complete producer writes before publishing the immutable backend texture.
+    if (context->threadSafeProxy() != proxy && !context->submit(GrSyncCpu::kYes))
+        return image;
     auto backendFormat = texture.getBackendFormat();
     auto mipmapped = texture.mipmapped();
     auto payload = makeUnique<NativePromiseImageContext>(image, WTF::move(texture));

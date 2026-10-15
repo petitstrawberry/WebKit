@@ -181,6 +181,9 @@ void CoordinatedPlatformLayer::invalidateClient()
 {
     ASSERT(isMainThread());
     purgeBackingStores();
+#if PLATFORM(SCARLET)
+    Locker locker { m_lock };
+#endif
     m_client = nullptr;
 }
 
@@ -1012,6 +1015,9 @@ bool CoordinatedPlatformLayer::isCompositionRequiredOrOngoing() const
 
 void CoordinatedPlatformLayer::requestComposition(CompositionReason reason)
 {
+#if PLATFORM(SCARLET)
+    Locker locker { m_lock };
+#endif
     if (m_client)
         m_client->requestComposition(reason);
 }

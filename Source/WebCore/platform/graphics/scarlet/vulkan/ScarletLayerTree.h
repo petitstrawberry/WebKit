@@ -9,54 +9,72 @@
 #include "GraphicsLayerFactory.h"
 #include "GraphicsLayer.h"
 #include "IntSize.h"
-#include "SkiaCompositingLayer.h"
-#include <cstdint>
+#include <array>
 #include <atomic>
-#include <wtf/Condition.h>
-#include <wtf/Lock.h>
 #include <memory>
-#include <wtf/Function.h>
+#include <mutex>
+#include <wtf/Condition.h>
 #include <wtf/HashSet.h>
-#include <wtf/MonotonicTime.h>
+#include <wtf/Lock.h>
 #include <wtf/RunLoop.h>
+#include <wtf/WorkQueue.h>
 namespace WebCore {
 class LocalFrameView;
 class SkiaPaintingEngine;
 
-// Owns the native scene on the WebCore owner run loop. Layer backing is private
-// Ganesh storage; only the embedding's final page images are shared with the UI.
+// GraphicsLayers and DOM stay on the owner. The committed scene, Ganesh,
+// surfaces and fences belong exclusively to the compositing run loop.
 class ScarletLayerTree final : public GraphicsLayerFactory, public CoordinatedPlatformLayer::Client {
 public:
+    struct Output {
+        struct Frame {
+            int32_t handle { -1 };
+            uint32_t width { 0 }, height { 0 };
+            uint64_t generation { 0 }, imageIdentifier { 0 }, epoch { 0 };
+            double scale { 1 };
+        };
+        ~Output();
+        int acquire(Frame&);
+        int release(uint64_t);
+        int imageIdentifier(uint64_t, uint64_t&);
+        unsigned state() const;
+        unsigned capacity() const;
+        uint64_t generation() const;
+        struct Statistics { uint64_t paints { 0 }, pixels { 0 }; };
+        Statistics statistics() const;
+    private:
+        friend class ScarletLayerTree;
+        struct Slot { Frame frame; bool leased { false }, ready { false }, reserved { false }; };
+        mutable std::mutex mutex;
+        std::array<Slot, 2> slots;
+        bool live { true }, failed { false }, pending { false };
+        uint64_t nextGeneration { 0 };
+        Statistics counters;
+    };
     static std::unique_ptr<ScarletLayerTree> create(Function<void()>&& scheduleRenderingUpdate);
     ~ScarletLayerTree();
     GraphicsLayerFactory* factory() { return this; }
     void setRootLayer(GraphicsLayer*);
     void setOverlayLayer(GraphicsLayer*);
-    void setViewport(const IntSize& cssViewport, float deviceScale);
-    // Commit platform state after Page::finalizeRenderingUpdate performed the layer flush.
+    void setViewport(const IntSize&, float, const IntSize& deviceSize);
+    void setOutputEpoch(uint64_t);
+    void discardOutput();
+    std::shared_ptr<Output> output() const { return m_output; }
     bool flush(LocalFrameView&);
-    // Damage is in device pixels. A missing prior damage means an unknown target;
-    // an empty prior damage means valid target pixels with nothing owed.
-    // Returns whether an animation remains active, not a submission status.
-    bool paint(SkCanvas&, std::optional<Damage>& frameDamage,
-        const std::optional<Damage>& priorTargetDamage = std::nullopt,
-        std::optional<SkColor> clearColor = std::nullopt);
-    struct TilePaintStatistics { uint64_t paints { 0 }; uint64_t pixels { 0 }; };
+    struct TilePaintStatistics { uint64_t paints { 0 }, pixels { 0 }; };
     TilePaintStatistics tilePaintStatistics() const;
     bool needsComposition() const;
-    void didSubmit(MonotonicTime);
-    void discardPendingPresentationCallbacks();
+    int readback(uint64_t, Vector<uint8_t>&, uint32_t&, uint32_t&);
     void detach();
-
 private:
     explicit ScarletLayerTree(Function<void()>&&);
     void assertIsOwner() const;
-    void updateSceneRoot();
+    void render();
+    void commit();
     void waitUntilPaintingComplete();
     Vector<Ref<CoordinatedPlatformLayer>> layersSnapshot() const;
-
     Ref<GraphicsLayer> createGraphicsLayer(GraphicsLayer::Type, GraphicsLayerClient&) override;
-    bool compositesOnMainThread() const override { return true; }
+    bool compositesOnMainThread() const override { return false; }
     void attachLayer(CoordinatedPlatformLayer&) override;
     void detachLayer(CoordinatedPlatformLayer&) override;
     SkiaPaintingEngine& paintingEngine() const override { return *m_paintingEngine; }
@@ -64,29 +82,35 @@ private:
     void notifyCompositionRequired() override;
     bool isCompositionRequiredOrOngoing() const override { return needsComposition(); }
     void requestComposition(CompositionReason) override;
-    RunLoop* compositingRunLoop() const override { return &m_ownerRunLoop; }
-    int maxTextureSize() const override;
+    RunLoop* compositingRunLoop() const override { return &m_workQueue->runLoop(); }
+    int maxTextureSize() const override { return m_maxTextureSize; }
     void willPaintTile() override;
     void didPaintTile() override;
     void didPaintTile(const IntRect&) override;
 
     Function<void()> m_scheduleRenderingUpdate;
     RunLoop& m_ownerRunLoop;
+    Ref<WorkQueue> m_workQueue;
+    RunLoop::Timer m_timer;
     std::unique_ptr<SkiaPaintingEngine> m_paintingEngine;
-    const Ref<SkiaCompositingLayer> m_sceneRoot;
-    HashSet<Ref<CoordinatedPlatformLayer>> m_layers;
-    RefPtr<GraphicsLayer> m_rootLayer;
-    RefPtr<GraphicsLayer> m_overlayLayer;
-    Vector<Function<void(MonotonicTime)>> m_presentationCallbacks;
-    IntSize m_cssViewport;
+    std::shared_ptr<Output> m_output { std::make_shared<Output>() };
+    struct Scene;
+    std::unique_ptr<Scene> m_scene; // Only the compositor accesses its contents.
+    HashSet<Ref<CoordinatedPlatformLayer>> m_layers; // Owner only.
+    RefPtr<GraphicsLayer> m_rootLayer, m_overlayLayer;
+    mutable std::mutex m_commitMutex;
+    Vector<Ref<CoordinatedPlatformLayer>> m_pendingLayers, m_removedLayers;
+    Vector<Ref<CoordinatedPlatformLayer>> m_pendingRoots;
+    bool m_commitPending { false };
+    IntSize m_cssViewport, m_deviceViewport;
     float m_deviceScale { 1 };
+    int m_maxTextureSize { 0 };
+    uint64_t m_epoch { 0 };
     mutable Lock m_paintingLock;
     Condition m_paintingCondition;
     TilePaintStatistics m_tilePaintStatistics WTF_GUARDED_BY_LOCK(m_paintingLock);
     std::atomic<unsigned> m_pendingTiles { 0 };
-    bool m_compositionRequired { true };
-    bool m_runningAnimations { false };
-    bool m_detached { false };
+    std::atomic<bool> m_compositionRequired { true }, m_detached { false };
 };
-} // namespace WebCore
+}
 #endif

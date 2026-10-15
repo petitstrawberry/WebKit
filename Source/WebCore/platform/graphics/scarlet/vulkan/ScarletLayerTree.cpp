@@ -10,37 +10,132 @@
 #include "LocalFrameView.h"
 #include "NativeImage.h"
 #include "PlatformDisplay.h"
+#include "ScarletSkiaVulkan.h"
+#include "SkiaCompositingLayer.h"
 #include "SkiaPaintingEngine.h"
 #include "TransformationMatrix.h"
+#include <skia/core/SkCanvas.h>
+#include <skia/core/SkColorSpace.h>
+#include <skia/core/SkSurface.h>
 #include <skia/gpu/ganesh/GrDirectContext.h>
 #include <cmath>
-#include <cstdio>
-#include <cstdlib>
-#include <cstring>
+#include <unistd.h>
 #include <wtf/MainThread.h>
+#include <wtf/text/WTFString.h>
 namespace WebCore {
+using namespace WTF::StringLiterals;
+ScarletLayerTree::Output::~Output()
+{
+    for (auto& slot : slots)
+        if (slot.frame.handle >= 0) close(slot.frame.handle);
+}
+int ScarletLayerTree::Output::acquire(Frame& out)
+{
+    std::lock_guard lock(mutex);
+    if (failed) return -1;
+    if (!live) return 1;
+    Slot* latest = nullptr;
+    for (auto& slot : slots)
+        if (slot.ready && (!latest || slot.frame.generation > latest->frame.generation))
+            latest = &slot;
+    if (!latest) return 1;
+    int handle = dup(latest->frame.handle);
+    if (handle < 0) return -1;
+    out = latest->frame;
+    out.handle = handle;
+    latest->ready = false;
+    latest->leased = true;
+    return 0;
+}
+int ScarletLayerTree::Output::release(uint64_t generation)
+{
+    std::lock_guard lock(mutex);
+    for (auto& slot : slots) {
+        if (slot.leased && slot.frame.generation == generation) {
+            slot.leased = false;
+            return 0;
+        }
+    }
+    return 1;
+}
+int ScarletLayerTree::Output::imageIdentifier(uint64_t generation, uint64_t& out)
+{
+    std::lock_guard lock(mutex);
+    for (const auto& slot : slots)
+        if (slot.leased && slot.frame.generation == generation) {
+            out = slot.frame.imageIdentifier;
+            return 0;
+        }
+    return 1;
+}
+unsigned ScarletLayerTree::Output::state() const
+{
+    std::lock_guard lock(mutex);
+    for (const auto& slot : slots) if (slot.ready) return 2;
+    return pending ? 1 : 0;
+}
+unsigned ScarletLayerTree::Output::capacity() const
+{
+    std::lock_guard lock(mutex);
+    if (!live || failed) return 0;
+    unsigned n = 0;
+    for (const auto& slot : slots) n += !slot.leased && !slot.reserved;
+    return n;
+}
+uint64_t ScarletLayerTree::Output::generation() const
+{
+    std::lock_guard lock(mutex);
+    return nextGeneration;
+}
+ScarletLayerTree::Output::Statistics ScarletLayerTree::Output::statistics() const
+{
+    std::lock_guard lock(mutex);
+    return counters;
+}
+struct ScarletLayerTree::Scene {
+    Ref<SkiaCompositingLayer> root { SkiaCompositingLayer::create() };
+    Vector<Ref<CoordinatedPlatformLayer>> layers;
+    struct Slot {
+        std::unique_ptr<ScarletSkiaVulkan::Surface> surface;
+        std::optional<Damage> damage;
+        IntSize size;
+    };
+    std::array<Slot, 2> slots;
+    std::unique_ptr<ScarletSkiaVulkan::Submission> submission;
+    Vector<Function<void(MonotonicTime)>> callbacks;
+    IntSize size;
+    double scale { 1 };
+    uint64_t epoch { 0 }, imageIdentifier { 0 }, paintedPixels { 0 };
+    unsigned pendingSlot { 0 };
+    bool animations { false };
+};
 std::unique_ptr<ScarletLayerTree> ScarletLayerTree::create(Function<void()>&& schedule)
 {
     RELEASE_ASSERT(isMainThread());
-    if (!PlatformDisplay::sharedDisplay().prepareSkiaContext())
-        return nullptr;
-    return std::unique_ptr<ScarletLayerTree>(new ScarletLayerTree(WTF::move(schedule)));
+    auto tree = std::unique_ptr<ScarletLayerTree>(new ScarletLayerTree(WTF::move(schedule)));
+    return tree->m_paintingEngine ? WTF::move(tree) : nullptr;
 }
 ScarletLayerTree::ScarletLayerTree(Function<void()>&& schedule)
     : m_scheduleRenderingUpdate(WTF::move(schedule))
     , m_ownerRunLoop(RunLoop::currentSingleton())
-    , m_paintingEngine(SkiaPaintingEngine::create(PlatformDisplay::sharedDisplay().skiaGrContext()->threadSafeProxy()))
-    , m_sceneRoot(SkiaCompositingLayer::create())
+    , m_workQueue(WorkQueue::create("org.webkit.ScarletCompositor"_s))
+    , m_timer(m_workQueue->runLoop(), "ScarletCompositor::Render"_s, this, &ScarletLayerTree::render)
 {
-    RELEASE_ASSERT(m_paintingEngine);
-    m_sceneRoot->setAnchorPoint({ 0, 0, 0 });
-    m_sceneRoot->setMasksToBounds(true);
-    m_sceneRoot->setDamagePropagationEnabled(true);
+    sk_sp<GrContextThreadSafeProxy> proxy;
+    m_workQueue->dispatchSync([&] {
+        auto& display = PlatformDisplay::sharedDisplay();
+        if (!display.prepareSkiaContext()) return;
+        proxy = display.skiaGrContext()->threadSafeProxy();
+        m_maxTextureSize = display.skiaGrContext()->maxTextureSize();
+        m_scene = makeUnique<Scene>();
+        m_scene->root->setAnchorPoint({ 0, 0, 0 });
+        m_scene->root->setMasksToBounds(true);
+        m_scene->root->setDamagePropagationEnabled(true);
+        m_timer.startRepeating(Seconds::fromMilliseconds(8));
+    });
+    if (proxy) m_paintingEngine = SkiaPaintingEngine::create(proxy);
 }
-ScarletLayerTree::~ScarletLayerTree()
-{
-    detach();
-}
+ScarletLayerTree::~ScarletLayerTree() { detach(); }
 void ScarletLayerTree::assertIsOwner() const
 {
     RELEASE_ASSERT(isMainThread() && &RunLoop::currentSingleton() == &m_ownerRunLoop);
@@ -53,67 +148,69 @@ Ref<GraphicsLayer> ScarletLayerTree::createGraphicsLayer(GraphicsLayer::Type typ
 }
 Vector<Ref<CoordinatedPlatformLayer>> ScarletLayerTree::layersSnapshot() const
 {
-    Vector<Ref<CoordinatedPlatformLayer>> layers;
-    layers.reserveInitialCapacity(m_layers.size());
-    for (const auto& layer : m_layers)
-        layers.append(layer.copyRef());
-    return layers;
+    Vector<Ref<CoordinatedPlatformLayer>> result;
+    for (const auto& layer : m_layers) result.append(layer.copyRef());
+    return result;
 }
 void ScarletLayerTree::setRootLayer(GraphicsLayer* layer)
 {
     assertIsOwner();
-    if (m_detached) {
-        // Page teardown may send its final detach notification after detach().
-        RELEASE_ASSERT(!layer);
-        return;
-    }
+    if (m_detached) { RELEASE_ASSERT(!layer); return; }
     RELEASE_ASSERT(!layer || is<GraphicsLayerCoordinated>(*layer));
-    if (m_rootLayer == layer)
-        return;
+    if (m_rootLayer == layer) return;
     m_rootLayer = layer;
     notifyCompositionRequired();
 }
 void ScarletLayerTree::setOverlayLayer(GraphicsLayer* layer)
 {
     assertIsOwner();
-    if (m_detached) {
-        // Page teardown may send its final detach notification after detach().
-        RELEASE_ASSERT(!layer);
-        return;
-    }
-    RELEASE_ASSERT(!layer || is<GraphicsLayerCoordinated>(*layer));
+    if (m_detached) { RELEASE_ASSERT(!layer); return; }
     m_overlayLayer = layer;
     notifyCompositionRequired();
 }
-void ScarletLayerTree::setViewport(const IntSize& size, float scale)
+void ScarletLayerTree::setViewport(const IntSize& size, float scale, const IntSize& deviceSize)
 {
     assertIsOwner();
     RELEASE_ASSERT(std::isfinite(scale) && scale > 0 && !size.isEmpty());
-    if (m_cssViewport == size && m_deviceScale == scale)
-        return;
+    if (m_cssViewport == size && m_deviceScale == scale && m_deviceViewport == deviceSize) return;
+    std::lock_guard lock(m_commitMutex);
     m_cssViewport = size;
+    m_deviceViewport = deviceSize;
     m_deviceScale = scale;
-    m_sceneRoot->setSize(FloatSize(size));
-    TransformationMatrix transform;
-    transform.scale(scale);
-    m_sceneRoot->setTransform(transform);
     notifyCompositionRequired();
+}
+void ScarletLayerTree::setOutputEpoch(uint64_t epoch)
+{
+    assertIsOwner();
+    std::lock_guard lock(m_commitMutex);
+    m_epoch = epoch;
+}
+void ScarletLayerTree::discardOutput()
+{
+    assertIsOwner();
+    m_workQueue->dispatchSync([this] {
+        if (!m_scene) return;
+        m_scene->submission = nullptr;
+        m_scene->callbacks.clear();
+        for (auto& slot : m_scene->slots) slot.damage.reset();
+        std::lock_guard lock(m_output->mutex);
+        m_output->pending = false;
+        for (auto& slot : m_output->slots) { slot.ready = false; slot.reserved = false; }
+    });
 }
 void ScarletLayerTree::attachLayer(CoordinatedPlatformLayer& layer)
 {
     assertIsOwner();
-    RELEASE_ASSERT(!m_detached);
     layer.setDamagePropagationEnabled(true);
     m_layers.add(Ref { layer });
 }
 void ScarletLayerTree::detachLayer(CoordinatedPlatformLayer& layer)
 {
     assertIsOwner();
-    waitUntilPaintingComplete();
-    layer.invalidateTarget();
+    // Keep removed targets alive until the compositor reaches a safe boundary.
+    { std::lock_guard lock(m_commitMutex); m_removedLayers.append(Ref { layer }); }
     m_layers.remove(layer);
-    if (!m_detached)
-        notifyCompositionRequired();
+    if (!m_detached) notifyCompositionRequired();
 }
 Ref<CoordinatedImageBackingStore> ScarletLayerTree::imageBackingStore(Ref<NativeImage>&& image)
 {
@@ -122,181 +219,252 @@ Ref<CoordinatedImageBackingStore> ScarletLayerTree::imageBackingStore(Ref<Native
 }
 bool ScarletLayerTree::needsComposition() const
 {
-    assertIsOwner();
-    if (m_detached)
-        return false;
-    if (m_compositionRequired || m_runningAnimations || m_pendingTiles)
-        return true;
-    for (const auto& layer : m_layers) {
-        if (layer->hasPendingTilesCreation())
-            return true;
-    }
-    return false;
+    return !m_detached && m_compositionRequired;
 }
 void ScarletLayerTree::notifyCompositionRequired()
 {
     assertIsOwner();
-    if (m_detached)
-        return;
+    if (m_detached) return;
     m_compositionRequired = true;
     m_scheduleRenderingUpdate();
 }
 void ScarletLayerTree::requestComposition(CompositionReason reason)
 {
-    assertIsOwner();
-    if (m_detached)
-        return;
+    if (m_detached) return;
     m_compositionRequired = true;
-    // Video and compositor animations update retained scene state without
-    // requesting a Page rendering update or running DOM rendering steps.
-    if (reason == CompositionReason::RenderingUpdate)
+    if (reason == CompositionReason::RenderingUpdate && isMainThread())
         m_scheduleRenderingUpdate();
 }
-int ScarletLayerTree::maxTextureSize() const
-{
-    assertIsOwner();
-    auto* context = PlatformDisplay::sharedDisplay().skiaGrContext();
-    RELEASE_ASSERT(context && !context->abandoned());
-    return context->maxTextureSize();
-}
-void ScarletLayerTree::willPaintTile()
-{
-    assertIsOwner();
-    ++m_pendingTiles;
-}
+void ScarletLayerTree::willPaintTile() { assertIsOwner(); ++m_pendingTiles; }
 void ScarletLayerTree::didPaintTile()
 {
-    // Painting workers publish only completion. GPU/scene access stays owner-only.
     Locker locker { m_paintingLock };
-    RELEASE_ASSERT(m_pendingTiles.load(std::memory_order_relaxed));
+    RELEASE_ASSERT(m_pendingTiles);
     m_pendingTiles.fetch_sub(1, std::memory_order_release);
+    m_compositionRequired = true;
     m_paintingCondition.notifyAll();
 }
 void ScarletLayerTree::didPaintTile(const IntRect& rect)
 {
     Locker locker { m_paintingLock };
     ++m_tilePaintStatistics.paints;
-    if (!rect.isEmpty())
-        m_tilePaintStatistics.pixels += static_cast<uint64_t>(rect.width()) * rect.height();
-    RELEASE_ASSERT(m_pendingTiles.load(std::memory_order_relaxed));
+    if (!rect.isEmpty()) m_tilePaintStatistics.pixels += static_cast<uint64_t>(rect.width()) * rect.height();
+    RELEASE_ASSERT(m_pendingTiles);
     m_pendingTiles.fetch_sub(1, std::memory_order_release);
+    m_compositionRequired = true;
     m_paintingCondition.notifyAll();
 }
 ScarletLayerTree::TilePaintStatistics ScarletLayerTree::tilePaintStatistics() const
 {
-    assertIsOwner();
     Locker locker { m_paintingLock };
     return m_tilePaintStatistics;
 }
-void ScarletLayerTree::updateSceneRoot()
-{
-    Vector<Ref<SkiaCompositingLayer>> children;
-    if (m_rootLayer)
-        children.append(downcast<GraphicsLayerCoordinated>(*m_rootLayer).coordinatedPlatformLayer().ensureTarget());
-    if (m_overlayLayer)
-        children.append(downcast<GraphicsLayerCoordinated>(*m_overlayLayer).coordinatedPlatformLayer().ensureTarget());
-    m_sceneRoot->setChildren(WTF::move(children));
-}
 void ScarletLayerTree::waitUntilPaintingComplete()
 {
-    assertIsOwner();
-    // Use CoordinatedGraphics' existing per-buffer publication barrier before
-    // taking pending updates. The callback follows buffer completion, so join
-    // the pending counter too before releasing clients or asserting settled.
-    for (const auto& layer : layersSnapshot())
-        layer->waitUntilPaintingComplete();
+    for (const auto& layer : layersSnapshot()) layer->waitUntilPaintingComplete();
     Locker locker { m_paintingLock };
-    m_paintingCondition.wait(m_paintingLock, [this] {
-        return !m_pendingTiles.load(std::memory_order_acquire);
-    });
+    m_paintingCondition.wait(m_paintingLock, [this] { return !m_pendingTiles.load(std::memory_order_acquire); });
 }
-
 bool ScarletLayerTree::flush(LocalFrameView& frameView)
 {
     assertIsOwner();
-    if (m_detached || frameView.needsLayout())
-        return false;
+    if (m_detached || frameView.needsLayout()) return false;
     auto layers = layersSnapshot();
-    for (const auto& layer : layers)
-        layer->flushPendingState();
-    OptionSet<CompositionReason> reasons { CompositionReason::RenderingUpdate, CompositionReason::VideoFrame, CompositionReason::Animation };
-    for (const auto& layer : layers)
-        layer->flushPositionChanges(reasons);
-    waitUntilPaintingComplete();
-    for (const auto& layer : layers)
-        layer->flushCompositingState(reasons);
-    for (const auto& layer : layers) {
-        if (layer->hasPendingBackingStoreTileUpdates())
-            layer->processPendingBackingStoreTileUpdates();
+    for (const auto& layer : layers) layer->flushPendingState();
+    Vector<Ref<CoordinatedPlatformLayer>> roots;
+    if (m_rootLayer) roots.append(downcast<GraphicsLayerCoordinated>(*m_rootLayer).coordinatedPlatformLayer());
+    if (m_overlayLayer) roots.append(downcast<GraphicsLayerCoordinated>(*m_overlayLayer).coordinatedPlatformLayer());
+    {
+        std::lock_guard lock(m_commitMutex);
+        m_pendingLayers = WTF::move(layers);
+        m_pendingRoots = WTF::move(roots);
+        m_commitPending = true;
     }
-    RELEASE_ASSERT(!m_pendingTiles);
-    updateSceneRoot();
+    m_compositionRequired = true;
     return true;
 }
-bool ScarletLayerTree::paint(SkCanvas& canvas, std::optional<Damage>& frameDamage,
-    const std::optional<Damage>& priorTargetDamage, std::optional<SkColor> clearColor)
+void ScarletLayerTree::commit()
 {
-    assertIsOwner();
-    RELEASE_ASSERT(!m_detached);
-    static const bool profileEnabled = [] {
-        const char* value = std::getenv("SCARLET_WEBVIEW_PROFILE");
-        return value && !std::strcmp(value, "1");
-    }();
-    auto profileStart = profileEnabled ? MonotonicTime::now() : MonotonicTime { };
-    RELEASE_ASSERT(PlatformDisplay::sharedDisplay().prepareSkiaContext());
-    if (profileEnabled) {
-        auto end = MonotonicTime::now();
-        static thread_local MonotonicTime periodStart;
-        static thread_local uint64_t paints { 0 }, prepareMicros { 0 };
-        if (!periodStart)
-            periodStart = profileStart;
-        ++paints;
-        prepareMicros += static_cast<uint64_t>(std::max(0.0, (end - profileStart).microseconds()));
-        if ((end - periodStart).seconds() >= 1) {
-            std::fprintf(stderr, "SCARLET_SCENE_CONTEXT_PROFILE tree=%p period_us=%llu paints=%llu prepare_us=%llu\n",
-                static_cast<void*>(this), static_cast<unsigned long long>((end - periodStart).microseconds()),
-                static_cast<unsigned long long>(paints), static_cast<unsigned long long>(prepareMicros));
-            periodStart = end;
-            paints = prepareMicros = 0;
+    // A tile worker publishes complete recordings atomically. While it paints,
+    // retain the previous scene and continue video/animation-only composition.
+    if (m_pendingTiles.load(std::memory_order_acquire)) return;
+    std::lock_guard lock(m_commitMutex);
+    if (!m_commitPending) return;
+    auto& scene = *m_scene;
+    for (const auto& layer : m_removedLayers) layer->invalidateTarget();
+    m_removedLayers.clear();
+    scene.layers = WTF::move(m_pendingLayers);
+    OptionSet<CompositionReason> reasons { CompositionReason::RenderingUpdate, CompositionReason::VideoFrame, CompositionReason::Animation };
+    for (const auto& layer : scene.layers) layer->flushPositionChanges(reasons);
+    for (const auto& layer : scene.layers) layer->flushCompositingState(reasons);
+    for (const auto& layer : scene.layers)
+        if (layer->hasPendingBackingStoreTileUpdates()) layer->processPendingBackingStoreTileUpdates();
+    Vector<Ref<SkiaCompositingLayer>> children;
+    for (const auto& layer : m_pendingRoots) children.append(layer->ensureTarget());
+    scene.root->setChildren(WTF::move(children));
+    scene.root->setSize(FloatSize(m_cssViewport));
+    TransformationMatrix transform;
+    transform.scale(m_deviceScale);
+    scene.root->setTransform(transform);
+    IntSize size = m_deviceViewport;
+    if (scene.size != size || scene.scale != m_deviceScale || scene.epoch != m_epoch) {
+        for (auto& slot : scene.slots) slot.damage.reset();
+        std::lock_guard outputLock(m_output->mutex);
+        for (auto& slot : m_output->slots) slot.ready = false;
+    }
+    scene.size = size;
+    scene.scale = m_deviceScale;
+    scene.epoch = m_epoch;
+    m_commitPending = false;
+}
+void ScarletLayerTree::render()
+{
+    RELEASE_ASSERT(!isMainThread());
+    if (m_detached || !m_scene) return;
+    auto& scene = *m_scene;
+    auto device = PlatformDisplay::sharedDisplay().skiaVulkanContext();
+    if (!device) return;
+    if (scene.submission) {
+        auto status = device->submissionStatus(*scene.submission);
+        if (status == ScarletSkiaVulkan::SubmissionStatus::Pending) return;
+        scene.submission = nullptr;
+        if (status == ScarletSkiaVulkan::SubmissionStatus::Failed) {
+            std::lock_guard lock(m_output->mutex);
+            m_output->failed = true;
+            return;
+        }
+        auto time = MonotonicTime::now();
+        auto& target = scene.slots[scene.pendingSlot];
+        target.damage.emplace(scene.size);
+        {
+            std::lock_guard lock(m_output->mutex);
+            auto& slot = m_output->slots[scene.pendingSlot];
+            // Only the latest unleased completion is retained.
+            for (auto& other : m_output->slots) other.ready = false;
+            slot.frame.generation = ++m_output->nextGeneration;
+            slot.frame.epoch = scene.epoch;
+            slot.frame.scale = scene.scale;
+            slot.reserved = false;
+            slot.ready = true;
+            m_output->pending = false;
+            ++m_output->counters.paints;
+            m_output->counters.pixels += scene.paintedPixels;
+        }
+        auto callbacks = std::exchange(scene.callbacks, { });
+        for (auto& callback : callbacks) callback(time);
+    }
+    bool required = m_compositionRequired.exchange(false);
+    commit();
+    if ((!required && !scene.animations) || scene.size.isEmpty()) return;
+    OptionSet<CompositionReason> reasons { CompositionReason::VideoFrame, CompositionReason::Animation };
+    for (const auto& layer : scene.layers) layer->flushCompositingState(reasons);
+    unsigned index = 2;
+    {
+        std::lock_guard lock(m_output->mutex);
+        for (unsigned i = 0; i < 2; ++i) {
+            auto& slot = m_output->slots[i];
+            if (!slot.leased && !slot.ready && !slot.reserved) {
+                index = i;
+                slot.reserved = true;
+                m_output->pending = true;
+                break;
+            }
         }
     }
-    m_presentationCallbacks.clear();
-    m_compositionRequired = false;
-    m_runningAnimations = m_sceneRoot->paint(canvas, frameDamage, priorTargetDamage, clearColor, &m_presentationCallbacks);
-    // needsComposition() keeps animated scene frames scheduled.
-    return m_runningAnimations;
+    if (index == 2) { m_compositionRequired = true; return; }
+    auto& target = scene.slots[index];
+    if (!target.surface || target.size != scene.size) {
+        target.surface = device->createSurface(scene.size.width(), scene.size.height());
+        target.size = scene.size;
+        target.damage.reset();
+        if (!target.surface) {
+            std::lock_guard lock(m_output->mutex);
+            m_output->failed = true;
+            return;
+        }
+        auto handle = target.surface->duplicateHandle();
+        std::lock_guard lock(m_output->mutex);
+        auto& frame = m_output->slots[index].frame;
+        if (frame.handle >= 0) close(frame.handle);
+        frame = { handle, static_cast<uint32_t>(scene.size.width()), static_cast<uint32_t>(scene.size.height()), 0, ++scene.imageIdentifier, scene.epoch, scene.scale };
+    }
+    auto prior = target.damage;
+    std::optional<Damage> delta { std::in_place, scene.size };
+    scene.animations = scene.root->paint(*target.surface->skSurface().getCanvas(), delta, prior, SK_ColorWHITE, &scene.callbacks);
+    for (auto& slot : scene.slots) {
+        if (!delta) slot.damage.reset();
+        else if (slot.damage) slot.damage->add(*delta);
+    }
+    if (prior && delta && prior->isEmpty() && delta->isEmpty()) {
+        scene.callbacks.clear();
+        std::lock_guard lock(m_output->mutex);
+        m_output->slots[index].reserved = false;
+        m_output->pending = false;
+        return;
+    }
+    Damage damage { scene.size, Damage::Mode::Full };
+    if (prior && delta) { damage = *prior; damage.add(*delta); }
+    scene.paintedPixels = 0;
+    for (auto rect : damage.rectsForPainting()) {
+        rect.intersect(IntRect { IntPoint { }, scene.size });
+        scene.paintedPixels += static_cast<uint64_t>(rect.width()) * rect.height();
+    }
+    scene.pendingSlot = index;
+    scene.submission = device->submitAsync(*target.surface);
+    if (!scene.submission) {
+        std::lock_guard lock(m_output->mutex);
+        m_output->failed = true;
+    }
 }
-void ScarletLayerTree::didSubmit(MonotonicTime time)
+int ScarletLayerTree::readback(uint64_t generation, Vector<uint8_t>& bytes, uint32_t& width, uint32_t& height)
 {
     assertIsOwner();
-    auto callbacks = std::exchange(m_presentationCallbacks, { });
-    for (auto& callback : callbacks)
-        callback(time);
-}
-void ScarletLayerTree::discardPendingPresentationCallbacks()
-{
-    assertIsOwner();
-    m_presentationCallbacks.clear();
+    int result = 1;
+    m_workQueue->dispatchSync([&] {
+        unsigned index = 2;
+        {
+            std::lock_guard lock(m_output->mutex);
+            for (unsigned i = 0; i < 2; ++i)
+                if (m_output->slots[i].leased && m_output->slots[i].frame.generation == generation) index = i;
+        }
+        if (index == 2 || !m_scene) return;
+        auto& slot = m_scene->slots[index];
+        width = slot.size.width(); height = slot.size.height();
+        auto info = SkImageInfo::Make(width, height, kBGRA_8888_SkColorType, kPremul_SkAlphaType, SkColorSpace::MakeSRGB());
+        bytes.resize(info.computeMinByteSize());
+        result = slot.surface->skSurface().readPixels(info, bytes.mutableSpan().data(), info.minRowBytes(), 0, 0) ? 0 : -1;
+    });
+    return result;
 }
 void ScarletLayerTree::detach()
 {
     assertIsOwner();
-    if (std::exchange(m_detached, true))
-        return;
+    if (m_detached.exchange(true)) return;
     waitUntilPaintingComplete();
-    m_runningAnimations = false;
-    m_compositionRequired = false;
-    m_presentationCallbacks.clear();
-    m_sceneRoot->setChildren({ });
+    m_workQueue->dispatchSync([this] {
+        m_timer.stop();
+        if (m_scene) {
+            m_scene->submission = nullptr;
+            m_scene->callbacks.clear();
+            m_scene->root->setChildren({ });
+            for (const auto& layer : m_scene->layers) layer->invalidateTarget();
+            for (const auto& layer : m_removedLayers) layer->invalidateTarget();
+            m_scene->root->invalidate();
+            m_scene = nullptr;
+        }
+        std::lock_guard lock(m_output->mutex);
+        m_output->live = false;
+        m_output->pending = false;
+        for (auto& slot : m_output->slots) slot.ready = false;
+    });
+    for (const auto& layer : layersSnapshot()) layer->invalidateClient();
+    m_layers.clear();
+    m_pendingLayers.clear();
+    m_pendingRoots.clear();
+    m_removedLayers.clear();
     m_rootLayer = nullptr;
     m_overlayLayer = nullptr;
-    auto layers = layersSnapshot();
-    for (const auto& layer : layers) {
-        layer->invalidateTarget();
-        layer->invalidateClient();
-    }
-    m_layers.clear();
-    m_sceneRoot->invalidate();
+    m_paintingEngine = nullptr;
 }
-} // namespace WebCore
+}
 #endif
