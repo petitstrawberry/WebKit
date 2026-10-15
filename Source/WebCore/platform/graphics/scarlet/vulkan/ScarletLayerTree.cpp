@@ -59,7 +59,11 @@ Vector<Ref<CoordinatedPlatformLayer>> ScarletLayerTree::layersSnapshot() const
 void ScarletLayerTree::setRootLayer(GraphicsLayer* layer)
 {
     assertIsOwner();
-    RELEASE_ASSERT(!m_detached);
+    if (m_detached) {
+        // Page teardown may send its final detach notification after detach().
+        RELEASE_ASSERT(!layer);
+        return;
+    }
     RELEASE_ASSERT(!layer || is<GraphicsLayerCoordinated>(*layer));
     if (m_rootLayer == layer)
         return;
@@ -69,7 +73,11 @@ void ScarletLayerTree::setRootLayer(GraphicsLayer* layer)
 void ScarletLayerTree::setOverlayLayer(GraphicsLayer* layer)
 {
     assertIsOwner();
-    RELEASE_ASSERT(!m_detached);
+    if (m_detached) {
+        // Page teardown may send its final detach notification after detach().
+        RELEASE_ASSERT(!layer);
+        return;
+    }
     RELEASE_ASSERT(!layer || is<GraphicsLayerCoordinated>(*layer));
     m_overlayLayer = layer;
     notifyCompositionRequired();
