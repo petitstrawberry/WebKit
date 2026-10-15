@@ -49,6 +49,10 @@ WTF_IGNORE_WARNINGS_IN_THIRD_PARTY_CODE_BEGIN
 #include <skia/utils/SkNWayCanvas.h>
 WTF_IGNORE_WARNINGS_IN_THIRD_PARTY_CODE_END
 #include <wtf/TZoneMallocInlines.h>
+#if PLATFORM(SCARLET)
+#include <cstdio>
+#include <cstdlib>
+#endif
 
 #if USE(COORDINATED_GRAPHICS)
 #if USE(TEXTURE_MAPPER)
@@ -133,6 +137,24 @@ std::unique_ptr<ImageBufferSkiaAcceleratedBackend> ImageBufferSkiaAcceleratedBac
     auto surface = SkSurfaces::RenderTarget(grContext, skgpu::Budgeted::kYes, imageInfo, msaaSampleCount, kTopLeft_GrSurfaceOrigin, &properties);
     if (!surface || !surface->getCanvas())
         return nullptr;
+
+#if PLATFORM(SCARLET)
+    if (parameters.purpose == RenderingPurpose::Canvas) {
+        static const bool profilingEnabled = [] {
+            auto* value = std::getenv("SCARLET_WEBVIEW_PROFILE");
+            return value && value[0] == '1' && !value[1];
+        }();
+        if (profilingEnabled) {
+            static std::once_flag reportOnce;
+            std::call_once(reportOnce, [&] {
+                // recordingContext is non-null for this actual Ganesh surface;
+                // querying it creates no snapshot, GPU work, or readback.
+                std::fprintf(stderr, "SCARLET_CANVAS_BACKEND backend=skia-vulkan width=%d height=%d surface_gpu=%u\n",
+                    backendSize.width(), backendSize.height(), static_cast<unsigned>(!!surface->recordingContext()));
+            });
+        }
+    }
+#endif
 
     return create(parameters, creationContext, WTF::move(surface));
 }
