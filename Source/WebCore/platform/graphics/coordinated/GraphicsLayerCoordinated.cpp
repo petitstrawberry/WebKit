@@ -40,6 +40,7 @@
 #if PLATFORM(SCARLET)
 #include "FilterOperation.h"
 #include <cmath>
+#include <limits>
 #endif
 #include "GraphicsLayerAsyncContentsDisplayDelegateCoordinated.h"
 #include "GraphicsLayerContentsDisplayDelegateCoordinated.h"
@@ -1017,8 +1018,74 @@ static void appendFilterInput(Vector<FloatRect>& inputs, const FloatRect& input,
         unbounded = true;
         return;
     }
-    if (!input.isEmpty() && !inputs.contains(input))
+    if (!input.isEmpty())
         inputs.append(input);
+}
+
+// Use the existing exact region algebra without narrowing floating-point
+// coordinates. Integer ranks describe topology only: gaps retain their original
+// floating-point extent when the normalized region is restored.
+static Vector<FloatRect> normalizedFilterInputs(Vector<FloatRect>&& inputs, bool& unbounded)
+{
+    if (inputs.size() < 2)
+        return WTF::move(inputs);
+    if (inputs.size() > static_cast<size_t>(std::numeric_limits<int>::max()) / 2) {
+        unbounded = true;
+        return { };
+    }
+    Vector<float> xs, ys;
+    xs.reserveInitialCapacity(inputs.size() * 2);
+    ys.reserveInitialCapacity(inputs.size() * 2);
+    for (const auto& rect : inputs) {
+        xs.append(rect.x());
+        xs.append(rect.maxX());
+        ys.append(rect.y());
+        ys.append(rect.maxY());
+    }
+    auto sortCoordinates = [](auto& coordinates) {
+        std::sort(coordinates.begin(), coordinates.end());
+        coordinates.shrink(std::unique(coordinates.begin(), coordinates.end()) - coordinates.begin());
+    };
+    sortCoordinates(xs);
+    sortCoordinates(ys);
+    auto rank = [](const auto& coordinates, float coordinate) {
+        return static_cast<int>(std::lower_bound(coordinates.begin(), coordinates.end(), coordinate) - coordinates.begin());
+    };
+    Vector<Region> regions;
+    regions.reserveInitialCapacity(inputs.size());
+    for (const auto& rect : inputs) {
+        const int left = rank(xs, rect.x()), right = rank(xs, rect.maxX());
+        const int top = rank(ys, rect.y()), bottom = rank(ys, rect.maxY());
+        regions.append(Region { IntRect { left, top, right - left, bottom - top } });
+    }
+    // Balanced unions avoid repeatedly scanning one growing region for every
+    // source rectangle. Identical and overlapping shadow branches collapse
+    // before the next filter, including overlaps with differing x/y spans.
+    while (regions.size() > 1) {
+        size_t output = 0;
+        for (size_t index = 0; index < regions.size(); index += 2) {
+            auto region = WTF::move(regions[index]);
+            if (index + 1 < regions.size())
+                region.unite(regions[index + 1]);
+            regions[output++] = WTF::move(region);
+        }
+        regions.shrink(output);
+    }
+    Vector<FloatRect> result;
+    for (const auto& rect : regions[0].rects()) {
+        const float left = xs[rect.x()], top = ys[rect.y()];
+        const float right = xs[rect.maxX()], bottom = ys[rect.maxY()];
+        // Restoring width/height can round inwards even though all four original
+        // edges are exactly representable. Keep the restored envelope outward.
+        float width = static_cast<double>(right) - left;
+        float height = static_cast<double>(bottom) - top;
+        if (static_cast<double>(left) + width < right)
+            width = std::nextafter(width, std::numeric_limits<float>::infinity());
+        if (static_cast<double>(top) + height < bottom)
+            height = std::nextafter(height, std::numeric_limits<float>::infinity());
+        appendFilterInput(result, FloatRect { left, top, width, height }, unbounded);
+    }
+    return result;
 }
 
 static Vector<FloatRect> reverseFilterInput(Vector<FloatRect> region, const FilterOperations& filters, bool& unbounded)
@@ -1052,7 +1119,7 @@ static Vector<FloatRect> reverseFilterInput(Vector<FloatRect> region, const Filt
             rect.inflateY(halo);
             appendFilterInput(inputs, rect, unbounded);
         }
-        region = WTF::move(inputs);
+        region = normalizedFilterInputs(WTF::move(inputs), unbounded);
     }
     return region;
 }
@@ -1071,7 +1138,7 @@ std::optional<Region> GraphicsLayerCoordinated::filterInputCoverage(const FloatR
         Vector<FloatRect> result;
         for (auto rect : source)
             appendFilterInput(result, transform.clampedBoundsOfProjectedQuad(FloatQuad(rect)), unbounded);
-        return result;
+        return normalizedFilterInputs(WTF::move(result), unbounded);
     };
     Vector<FloatRect> rootInput { viewport };
     for (size_t index = filteredAncestors.size(); index; --index) {
@@ -1085,7 +1152,7 @@ std::optional<Region> GraphicsLayerCoordinated::filterInputCoverage(const FloatR
             for (auto rect : project(futureInput, layer.m_layerTransform.future.combined()))
                 appendFilterInput(next, rect, unbounded);
         }
-        rootInput = WTF::move(next);
+        rootInput = normalizedFilterInputs(WTF::move(next), unbounded);
     }
     if (!m_layerTransform.cachedInverse)
         return Region { };
