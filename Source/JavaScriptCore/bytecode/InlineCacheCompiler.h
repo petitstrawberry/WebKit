@@ -287,8 +287,8 @@ public:
     static void NODELETE emitDataICEpilogue(CCallHelpers&);
     static void emitDataICPrepareForCall(CCallHelpers&);
     static void emitDataICRestoreAfterCall(CCallHelpers&);
-    static CCallHelpers::Jump emitDataICCheckStructure(CCallHelpers&, GPRReg baseGPR, GPRReg scratchGPR);
-    static CCallHelpers::JumpList emitDataICCheckUid(CCallHelpers&, bool isSymbol, GPRReg, GPRReg scratchGPR);
+    static MacroAssembler::Jump emitDataICCheckStructure(CCallHelpers&, GPRReg baseGPR, GPRReg scratchGPR);
+    static MacroAssembler::JumpList emitDataICCheckUid(CCallHelpers&, bool isSymbol, GPRReg, GPRReg scratchGPR);
     static void emitDataICJumpNextHandler(CCallHelpers&);
 
     bool NODELETE useHandlerIC() const;
