@@ -44,6 +44,9 @@
 #include "PopupMenuClient.h"
 #include "RegistrableDomain.h"
 #include "ScarletFrameLoaderClient.h"
+#if USE(COORDINATED_GRAPHICS)
+#include "ScarletLayerTree.h"
+#endif
 #include "SearchPopupMenu.h"
 #include "TextIndicator.h"
 #include <cstdio>
@@ -121,10 +124,18 @@ private:
 class ScarletChromeClient final : public ChromeClient {
     WTF_MAKE_TZONE_ALLOCATED(ScarletChromeClient);
 public:
+#if USE(COORDINATED_GRAPHICS)
+    ScarletChromeClient(ScarletFrameLoadState& state, ScarletLayerTree& layerTree)
+        : m_state(state)
+        , m_layerTree(layerTree)
+    {
+    }
+#else
     explicit ScarletChromeClient(ScarletFrameLoadState& state)
         : m_state(state)
     {
     }
+#endif
 
 private:
     void repaint(const char* reason) const
@@ -334,9 +345,15 @@ private:
         return nullptr;
     }
 
+#if USE(COORDINATED_GRAPHICS)
+    bool allowsAcceleratedCompositing() const final { return true; }
+    CompositingTriggerFlags allowedCompositingTriggers() const final { return static_cast<CompositingTriggerFlags>(AllTriggers); }
+    GraphicsLayerFactory* graphicsLayerFactory() const final { return m_layerTree.factory(); }
+    void attachRootGraphicsLayer(LocalFrame&, GraphicsLayer* layer) final { m_layerTree.setRootLayer(layer); }
+    void attachViewOverlayGraphicsLayer(GraphicsLayer* layer) final { m_layerTree.setOverlayLayer(layer); }
+#else
     bool allowsAcceleratedCompositing() const final { return false; }
     CompositingTriggerFlags allowedCompositingTriggers() const final { return 0; }
-    bool usePluginRendererScrollableArea(LocalFrame&) const final { return false; }
     void attachRootGraphicsLayer(LocalFrame&, GraphicsLayer* layer) final
     {
         if (layer)
@@ -347,6 +364,8 @@ private:
         if (layer)
             unsupported("Scarlet embedding does not attach native overlay layers"_s);
     }
+#endif
+    bool usePluginRendererScrollableArea(LocalFrame&) const final { return false; }
     void exitVideoFullscreenForVideoElement(HTMLVideoElement&, CompletionHandler<void(bool)>&& completion) final
     {
         unsupported("Scarlet embedding does not provide video fullscreen UI"_s);
@@ -372,14 +391,24 @@ private:
     bool isEmptyChromeClient() const final { return false; }
 
     ScarletFrameLoadState& m_state;
+#if USE(COORDINATED_GRAPHICS)
+    ScarletLayerTree& m_layerTree;
+#endif
     const bool m_tracePaintInvalidations { std::getenv("MYRICA_WEBKIT_TRACE_PAINT") != nullptr };
 };
 
 WTF_MAKE_TZONE_ALLOCATED_IMPL(ScarletChromeClient);
 
+#if USE(COORDINATED_GRAPHICS)
+UniqueRef<ChromeClient> createScarletChromeClient(ScarletFrameLoadState& state, ScarletLayerTree& layerTree)
+{
+    return makeUniqueRef<ScarletChromeClient>(state, layerTree);
+}
+#else
 UniqueRef<ChromeClient> createScarletChromeClient(ScarletFrameLoadState& state)
 {
     return makeUniqueRef<ScarletChromeClient>(state);
 }
+#endif
 
 } // namespace WebCore

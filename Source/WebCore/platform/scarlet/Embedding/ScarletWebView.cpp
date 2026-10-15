@@ -4,6 +4,9 @@
 #include "ScarletWebView.h"
 #include "ScarletEditorClient.h"
 #include "ScarletChromeClient.h"
+#if USE(COORDINATED_GRAPHICS)
+#include "ScarletLayerTree.h"
+#endif
 #include "ScarletBackForwardClient.h"
 #include "ScarletFrameLoaderClient.h"
 #include "ScarletStorage.h"
@@ -105,6 +108,11 @@ using namespace WTF::StringLiterals;
 
 struct ScarletWebView {
     ScarletFrameLoadState loadState;
+#if USE(COORDINATED_GRAPHICS)
+    // ChromeClient borrows this tree. It must outlive Page and its GraphicsLayers,
+    // including failure unwinding before the explicit destroy ABI is reached.
+    std::unique_ptr<ScarletLayerTree> layerTree;
+#endif
     RefPtr<Page> page;
     RefPtr<LocalFrame> frame;
 #if USE(SKIA)
@@ -130,6 +138,11 @@ struct ScarletWebView {
         uint64_t imageIdentifier { 0 };
         bool pendingFullPaint { true };
         IntRect pendingDamage;
+#if USE(COORDINATED_GRAPHICS)
+        // Device pixels: nullopt means unknown contents, empty means current.
+        // Leased allocations keep accumulating scene damage without being drawn.
+        std::optional<Damage> pendingSceneDamage;
+#endif
         uint32_t width { 0 }, height { 0 };
     };
     std::array<GpuSlot, 2> gpuSlots;
@@ -342,12 +355,15 @@ private:
 
 void recordPaintProfile(ScarletWebView& view, const IntRect& damage, bool neededLayout, bool explicitFull,
     bool dirtyFallback, bool slotFull, bool submitted, MonotonicTime start, MonotonicTime layoutEnd,
-    MonotonicTime recordStart, MonotonicTime recordEnd, MonotonicTime end)
+    MonotonicTime recordStart, MonotonicTime recordEnd, MonotonicTime end,
+    std::optional<uint64_t> physicalPixels = std::nullopt)
 {
     auto& c = view.paintProfile.counters;
     addProfileCounter(c.attempts, 1);
     addProfileCounter(c.failedSubmits, !submitted);
-    addProfileCounter(c.full, damage == IntRect { IntPoint { }, cssSize(view) });
+    addProfileCounter(c.full, physicalPixels
+        ? *physicalPixels == static_cast<uint64_t>(view.width) * view.height
+        : damage == IntRect { IntPoint { }, cssSize(view) });
     addProfileCounter(c.layout, neededLayout);
     addProfileCounter(c.explicitFull, explicitFull);
     addProfileCounter(c.dirtyFallback, dirtyFallback);
@@ -357,7 +373,7 @@ void recordPaintProfile(ScarletWebView& view, const IntRect& damage, bool needed
     auto physicalDamage = enclosingIntRect(scaledDamage);
     physicalDamage.intersect(IntRect { 0, 0, static_cast<int>(view.width), static_cast<int>(view.height) });
     if (submitted)
-        addProfileCounter(c.pixels, static_cast<uint64_t>(physicalDamage.width()) * physicalDamage.height());
+        addProfileCounter(c.pixels, physicalPixels.value_or(static_cast<uint64_t>(physicalDamage.width()) * physicalDamage.height()));
     // Page::updateRendering may already have laid out during tick. This measures
     // only updateLayoutIgnorePendingStylesheets executed by this paint call.
     addProfileCounter(c.paintLayoutMicros, profileMicroseconds(start, layoutEnd));
@@ -370,8 +386,119 @@ void recordPaintProfile(ScarletWebView& view, const IntRect& damage, bool needed
 }
 #endif
 
+#if USE(COORDINATED_GRAPHICS)
+int32_t paintCoordinated(ScarletWebView& view)
+{
+    RefPtr frameView = view.frame->view();
+    RefPtr document = view.frame->document();
+    if (!frameView || !document)
+        return SWV_EMPTY;
+    if (!view.loadState.needsPaint && !frameView->needsLayout() && view.surface && !view.layerTree->needsComposition())
+        return SWV_EMPTY;
+
+    bool neededLayout = frameView->needsLayout();
+    bool explicitFullPaint = view.loadState.fullPaint;
+    auto profileStart = beginProfile(view);
+    document->updateLayoutIgnorePendingStylesheets();
+    auto profileLayoutEnd = view.paintProfile.enabled ? MonotonicTime::now() : MonotonicTime { };
+    if (!frameView->renderView() || frameView->needsLayout() || !frameView->layoutContext().inPaintableState())
+        return SWV_EMPTY;
+
+    ScarletWebView::GpuSlot* target = nullptr;
+    for (auto& slot : view.gpuSlots) {
+        if (slot.surface.get() == view.surface)
+            target = &slot;
+    }
+    if (!target || target->lease)
+        return SWV_FAILED;
+
+    // Clear only the DOM invalidations consumed by this flush. New callbacks
+    // raised while rasterizing or presenting must remain pending for the next tick.
+    view.loadState.needsPaint = false;
+    view.loadState.fullPaint = false;
+    view.loadState.dirtyRect = { };
+    auto profileRecordStart = view.paintProfile.enabled ? MonotonicTime::now() : MonotonicTime { };
+    // Paint may follow input or a resource callback before the next host tick.
+    // Flush any layout/property changes through WebCore before committing them.
+    if (!frameView->flushCompositingStateIncludingSubframes() || !view.layerTree->flush(*frameView)) {
+        view.loadState.needsPaint = true;
+        view.loadState.needsRenderingUpdate = true;
+        return SWV_EMPTY;
+    }
+
+    const IntSize deviceSize { static_cast<int>(view.width), static_cast<int>(view.height) };
+    const auto priorTargetDamage = target->pendingSceneDamage;
+    std::optional<Damage> sceneDamage { std::in_place, deviceSize };
+    view.page->willStartRenderingUpdateDisplay();
+    // The tree applies DPR on its scene root. A second canvas scale would
+    // incorrectly scale both content and the device-space damage.
+    bool runningAnimations = view.layerTree->paint(*view.surface->skSurface().getCanvas(), sceneDamage, priorTargetDamage, SK_ColorWHITE);
+    auto profileRecordEnd = view.paintProfile.enabled ? MonotonicTime::now() : MonotonicTime { };
+    if (runningAnimations)
+        view.loadState.needsRenderingUpdate = true;
+
+    // The retained scene consumes its current damage during paint. Preserve
+    // that delta for every output allocation before any submission can fail.
+    for (auto& slot : view.gpuSlots) {
+        if (!sceneDamage)
+            slot.pendingSceneDamage.reset();
+        else if (slot.pendingSceneDamage)
+            slot.pendingSceneDamage->add(*sceneDamage);
+    }
+
+    if (priorTargetDamage && sceneDamage && priorTargetDamage->isEmpty() && sceneDamage->isEmpty()) {
+        view.layerTree->discardPendingPresentationCallbacks();
+        view.page->didCompleteRenderingUpdateDisplay();
+        return SWV_EMPTY;
+    }
+
+    Damage repaintDamage { deviceSize, Damage::Mode::Full };
+    if (priorTargetDamage && sceneDamage) {
+        repaintDamage = *priorTargetDamage;
+        repaintDamage.add(*sceneDamage);
+    }
+    // Match the compositor's actual non-overlapping paint rects rather than a
+    // bounding box (distant small changes must not count as a full repaint).
+    uint64_t paintedPixels = 0;
+    const IntRect viewport { IntPoint { }, deviceSize };
+    for (auto rect : repaintDamage.rectsForPainting()) {
+        rect.intersect(viewport);
+        paintedPixels += static_cast<uint64_t>(rect.width()) * rect.height();
+    }
+    auto device = PlatformDisplay::sharedDisplay().skiaVulkanContext();
+    bool submitted = device && device->submit(*view.surface);
+    auto submittedAt = MonotonicTime::now();
+    if (view.paintProfile.enabled)
+        recordPaintProfile(view, IntRect { IntPoint { }, cssSize(view) }, neededLayout, explicitFullPaint,
+            false, !priorTargetDamage, submitted, profileStart, profileLayoutEnd, profileRecordStart, profileRecordEnd,
+            submittedAt, paintedPixels);
+    view.page->didCompleteRenderingUpdateDisplay();
+    if (!submitted) {
+        // A failed target is no longer trusted. The other slot still owns the
+        // scene delta above and can catch up when its lease is returned.
+        target->pendingSceneDamage.reset();
+        view.loadState.needsPaint = true;
+        view.layerTree->discardPendingPresentationCallbacks();
+        view.loadState.error = "WebCore Vulkan layer submission failed."_s;
+        return SWV_FAILED;
+    }
+
+    // Only this allocation has caught up; leased outputs remain immutable.
+    target->pendingSceneDamage.emplace(deviceSize);
+    ++view.paintStatistics.paints;
+    view.paintStatistics.painted_pixels += paintedPixels;
+    ++view.generation;
+    view.layerTree->didSubmit(submittedAt);
+    view.page->didCompleteRenderingFrame();
+    return SWV_OK;
+}
+#endif
+
 int32_t paint(ScarletWebView& view)
 {
+#if USE(COORDINATED_GRAPHICS)
+    return paintCoordinated(view);
+#else
     RefPtr frameView = view.frame->view();
     RefPtr document = view.frame->document();
     if (!frameView || !document)
@@ -513,6 +640,7 @@ int32_t paint(ScarletWebView& view)
         ++view.generation;
 #endif
     return SWV_OK;
+#endif // USE(COORDINATED_GRAPHICS)
 }
 } // namespace
 
@@ -663,7 +791,18 @@ extern "C" int32_t scarlet_webview_create(const SWVConfiguration* configuration,
     pageConfiguration.storageNamespaceProvider = createScarletStorageNamespaceProvider();
     pageConfiguration.storageNamespaceProvider->setSessionStorageQuota(5 * 1024 * 1024);
     pageConfiguration.editorClient = createScarletEditorClient();
+#if USE(COORDINATED_GRAPHICS)
+    view->layerTree = ScarletLayerTree::create([state = &view->loadState] {
+        // Composition-only changes do not invalidate DOM backing tiles.
+        state->needsRenderingUpdate = true;
+    });
+    if (!view->layerTree)
+        return SWV_FAILED;
+    view->layerTree->setViewport(cssSize(*view), static_cast<float>(view->scale));
+    pageConfiguration.chromeClient = createScarletChromeClient(view->loadState, *view->layerTree);
+#else
     pageConfiguration.chromeClient = createScarletChromeClient(view->loadState);
+#endif
     pageConfiguration.backForwardClient = createScarletBackForwardClient();
     auto* parameters = std::get_if<PageConfiguration::LocalMainFrameCreationParameters>(&pageConfiguration.mainFrameCreationParameters);
     if (!parameters)
@@ -683,7 +822,13 @@ extern "C" int32_t scarlet_webview_create(const SWVConfiguration* configuration,
     settings.setLocalStorageEnabled(true);
     settings.setSessionStorageEnabled(true);
     settings.setCookieEnabled(true);
+#if USE(COORDINATED_GRAPHICS)
+    settings.setAcceleratedCompositingEnabled(true);
+    settings.setForceCompositingMode(true);
+    settings.setAcceleratedCompositingForFixedPositionEnabled(true);
+#else
     settings.setAcceleratedCompositingEnabled(false);
+#endif
 #if ENABLE(VIDEO)
     #if USE(SCARLET_MEDIA)
     settings.setMediaEnabled(true);
@@ -730,6 +875,9 @@ extern "C" int32_t scarlet_webview_destroy(ScarletWebView* view)
     unregisterScarletLivePage(*view->page);
     view->surface = nullptr;
     view->publishedPixels.clear();
+#if USE(COORDINATED_GRAPHICS)
+    view->layerTree->detach();
+#endif
     traceTeardown("before-release-page");
     view->page = nullptr;
     traceTeardown("after-release-page");
@@ -778,6 +926,11 @@ extern "C" int32_t scarlet_webview_resize(ScarletWebView* view, uint32_t width, 
     view->width = width;
     view->height = height;
     view->scale = scale;
+#if USE(COORDINATED_GRAPHICS)
+    for (auto& slot : view->gpuSlots)
+        slot.pendingSceneDamage.reset();
+    view->layerTree->setViewport(cssSize(*view), static_cast<float>(scale));
+#endif
     view->hasMousePosition = false;
     view->surface = nullptr;
     view->publishedPixels.clear();
@@ -871,12 +1024,24 @@ extern "C" int32_t scarlet_webview_tick(ScarletWebView* view)
     // This runs real animation frame callbacks, timelines, resize/scroll
     // events, observers and rendering steps; the host never executes JS.
     RefPtr frameView = view->frame->view();
-    if (view->loadState.needsRenderingUpdate || view->loadState.needsPaint || (frameView && frameView->needsLayout())) {
+    if (view->loadState.needsRenderingUpdate || view->loadState.needsPaint || (frameView && frameView->needsLayout())
+#if USE(COORDINATED_GRAPHICS)
+        || view->layerTree->needsComposition()
+#endif
+    ) {
         // Clear before running callbacks: animation frames and observers may
         // request the next update while this one is being completed.
         view->loadState.needsRenderingUpdate = false;
         view->page->updateRendering();
         view->page->finalizeRenderingUpdate({ });
+#if USE(COORDINATED_GRAPHICS)
+        // Page finalization already flushes the frame's GraphicsLayers. Commit
+        // their retained scene only after layout and all rendering steps finish.
+        frameView = view->frame->view();
+        if (frameView && !view->layerTree->flush(*frameView))
+            view->loadState.needsRenderingUpdate = true;
+        view->page->didUpdateRendering();
+#endif
     }
     return SWV_OK;
 }
@@ -889,7 +1054,11 @@ extern "C" int32_t scarlet_webview_needs_paint(ScarletWebView* view, uint32_t* o
     if (!out)
         return SWV_INVALID_ARGUMENT;
     RefPtr frameView = view->frame->view();
-    *out = view->loadState.needsPaint || !view->surface || (frameView && frameView->needsLayout());
+    *out = view->loadState.needsPaint || !view->surface || (frameView && frameView->needsLayout())
+#if USE(COORDINATED_GRAPHICS)
+        || view->layerTree->needsComposition()
+#endif
+        ;
     return SWV_OK;
 }
 
@@ -939,7 +1108,11 @@ extern "C" int32_t scarlet_webview_gpu_frame(ScarletWebView* view, SWVGpuFrame* 
     *out = { -1, 0, 0, 0, 0 };
 #if USE(SKIA)
     RefPtr frameView = view->frame->view();
-    if (view->surface && !view->loadState.needsPaint && frameView && !frameView->needsLayout()) return SWV_EMPTY;
+    if (view->surface && !view->loadState.needsPaint && frameView && !frameView->needsLayout()
+#if USE(COORDINATED_GRAPHICS)
+        && !view->layerTree->needsComposition()
+#endif
+    ) return SWV_EMPTY;
     auto device = PlatformDisplay::sharedDisplay().skiaVulkanContext();
     if (!device) { view->loadState.error = "Native Vulkan context creation failed."_s; return SWV_FAILED; }
     for (auto& slot : view->gpuSlots) {
@@ -956,6 +1129,9 @@ extern "C" int32_t scarlet_webview_gpu_frame(ScarletWebView* view, SWVGpuFrame* 
             slot.imageIdentifier = ++view->nextImageIdentifier;
             slot.pendingFullPaint = true;
             slot.pendingDamage = { };
+#if USE(COORDINATED_GRAPHICS)
+            slot.pendingSceneDamage.reset();
+#endif
             slot.width = view->width; slot.height = view->height;
         }
         view->surface = slot.surface.get();
@@ -1224,6 +1400,25 @@ extern "C" int32_t scarlet_webview_media_statistics(ScarletWebView* view, uint32
         if (auto metrics = player->videoPlaybackQualityMetrics())
             out->presented_frames = metrics->displayCompositedVideoFrames;
     }
+    return SWV_OK;
+#else
+    return SWV_UNSUPPORTED;
+#endif
+}
+
+extern "C" int32_t scarlet_webview_compositing_statistics(ScarletWebView* view, SWVCompositingStatistics* out)
+{
+    auto status = viewStatus(view);
+    if (status != SWV_OK)
+        return status;
+    if (!out)
+        return SWV_INVALID_ARGUMENT;
+    *out = { };
+#if USE(COORDINATED_GRAPHICS)
+    auto statistics = view->layerTree->tilePaintStatistics();
+    out->tile_paints = statistics.paints;
+    out->tile_pixels = statistics.pixels;
+    out->enabled = 1;
     return SWV_OK;
 #else
     return SWV_UNSUPPORTED;

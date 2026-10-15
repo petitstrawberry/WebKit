@@ -34,7 +34,11 @@
 namespace WebCore {
 
 struct ScarletFrameLoadState;
-
+#if USE(COORDINATED_GRAPHICS)
+class ScarletLayerTree;
+UniqueRef<ChromeClient> createScarletChromeClient(ScarletFrameLoadState&, ScarletLayerTree&);
+#else
 UniqueRef<ChromeClient> createScarletChromeClient(ScarletFrameLoadState&);
+#endif
 
 } // namespace WebCore

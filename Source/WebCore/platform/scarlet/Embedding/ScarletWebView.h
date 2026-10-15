@@ -134,6 +134,14 @@ int32_t scarlet_webview_text_content(ScarletWebView*, SWVBytes element_id, SWVBy
 /* Actual raster work counters, for embedding performance verification. */
 typedef struct SWVPaintStatistics { uint64_t paints; uint64_t painted_pixels; } SWVPaintStatistics;
 int32_t scarlet_webview_paint_statistics(ScarletWebView*, SWVPaintStatistics*);
+/* Separate retained-backing raster work from final page-image compositions.
+ * tile_pixels counts actual clipped device-pixel tile raster work, not CSS area.
+ * OFF builds zero the output and return SWV_UNSUPPORTED. */
+typedef struct SWVCompositingStatistics {
+    uint64_t tile_paints, tile_pixels;
+    uint32_t enabled, reserved;
+} SWVCompositingStatistics;
+int32_t scarlet_webview_compositing_statistics(ScarletWebView*, SWVCompositingStatistics*);
 
 /* Read-only video inspection on the view owner. Enumerates actual HTML video
  * elements in the main Document, excluding subframes and shadow trees.
