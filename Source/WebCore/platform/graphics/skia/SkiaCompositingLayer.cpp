@@ -241,6 +241,11 @@ void SkiaCompositingLayer::setImageBackingStore(CoordinatedImageBackingStore* im
 void SkiaCompositingLayer::setContentsBuffer(std::unique_ptr<CoordinatedPlatformLayerBuffer>&& contentsBuffer)
 {
     m_contentsBuffer = WTF::move(contentsBuffer);
+#if PLATFORM(SCARLET)
+    // Video updates can arrive without a DOM/tile commit. Damage only this
+    // retained layer; pending DOM damage remains with its own commit.
+    damageWholeLayer();
+#endif
 }
 
 std::unique_ptr<CoordinatedPlatformLayerBuffer> SkiaCompositingLayer::takeContentsBuffer()

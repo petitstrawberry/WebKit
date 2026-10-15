@@ -316,35 +316,49 @@ void ScarletLayerTree::commit()
     // A tile worker publishes complete recordings atomically. While it paints,
     // retain the previous scene and continue video/animation-only composition.
     if (m_pendingTiles.load(std::memory_order_acquire)) return;
-    std::lock_guard lock(m_commitMutex);
-    if (!m_commitPending) return;
+    Vector<Ref<CoordinatedPlatformLayer>> layers, roots, removed;
+    IntSize cssViewport, deviceViewport;
+    float deviceScale;
+    uint64_t epoch;
+    {
+        std::lock_guard lock(m_commitMutex);
+        if (!m_commitPending) return;
+        layers = WTF::move(m_pendingLayers);
+        roots = WTF::move(m_pendingRoots);
+        removed = WTF::move(m_removedLayers);
+        cssViewport = m_cssViewport;
+        deviceViewport = m_deviceViewport;
+        deviceScale = m_deviceScale;
+        epoch = m_epoch;
+        m_commitPending = false;
+    }
+    // Do not hold the owner handoff lock while replaying DDL or uploading GPU
+    // tiles. WebCore can start recording its next update concurrently.
     auto& scene = *m_scene;
-    for (const auto& layer : m_removedLayers) layer->invalidateTarget();
-    m_removedLayers.clear();
-    scene.layers = WTF::move(m_pendingLayers);
+    for (const auto& layer : removed) layer->invalidateTarget();
+    scene.layers = WTF::move(layers);
     OptionSet<CompositionReason> reasons { CompositionReason::RenderingUpdate, CompositionReason::VideoFrame, CompositionReason::Animation };
     for (const auto& layer : scene.layers) layer->flushPositionChanges(reasons);
     for (const auto& layer : scene.layers) layer->flushCompositingState(reasons);
     for (const auto& layer : scene.layers)
         if (layer->hasPendingBackingStoreTileUpdates()) layer->processPendingBackingStoreTileUpdates();
     Vector<Ref<SkiaCompositingLayer>> children;
-    for (const auto& layer : m_pendingRoots) children.append(layer->ensureTarget());
+    for (const auto& layer : roots) children.append(layer->ensureTarget());
     scene.root->setChildren(WTF::move(children));
-    scene.root->setSize(FloatSize(m_cssViewport));
+    scene.root->setSize(FloatSize(cssViewport));
     TransformationMatrix transform;
-    transform.scale(m_deviceScale);
+    transform.scale(deviceScale);
     scene.root->setTransform(transform);
-    IntSize size = m_deviceViewport;
-    if (scene.size != size || scene.scale != m_deviceScale || scene.epoch != m_epoch) {
+    IntSize size = deviceViewport;
+    if (scene.size != size || scene.scale != deviceScale || scene.epoch != epoch) {
         scene.hasPublished = false;
         for (auto& slot : scene.slots) slot.damage.reset();
         std::lock_guard outputLock(m_output->mutex);
         for (auto& slot : m_output->slots) slot.ready = false;
     }
     scene.size = size;
-    scene.scale = m_deviceScale;
-    scene.epoch = m_epoch;
-    m_commitPending = false;
+    scene.scale = deviceScale;
+    scene.epoch = epoch;
 }
 void ScarletLayerTree::render()
 {
