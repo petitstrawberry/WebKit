@@ -29,6 +29,7 @@
 #include "BytecodeStructs.h"
 #include "CodeBlock.h"
 #include "DFGJITCode.h"
+#include "JumpTable.h"
 #include "UnlinkedMetadataTableInlines.h"
 
 namespace JSC {
