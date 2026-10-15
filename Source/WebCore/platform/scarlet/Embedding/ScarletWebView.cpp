@@ -67,6 +67,7 @@
 #include <pal/SessionID.h>
 #include <JavaScriptCore/VM.h>
 #include <wtf/MainThread.h>
+#include <wtf/MonotonicTime.h>
 #include <wtf/RunLoop.h>
 #include <wtf/URL.h>
 #include <wtf/text/CString.h>
@@ -107,6 +108,22 @@ struct ScarletWebView {
     RefPtr<Page> page;
     RefPtr<LocalFrame> frame;
 #if USE(SKIA)
+    // Accessed exclusively by the WebCore owner thread, like the page itself.
+    struct PaintProfile {
+        bool enabled { [] {
+            const char* value = std::getenv("SCARLET_WEBVIEW_PROFILE");
+            return value && !std::strcmp(value, "1");
+        }() };
+        bool started { false };
+        MonotonicTime periodStart;
+        struct Counters {
+            uint64_t attempts { 0 }, failedSubmits { 0 }, full { 0 };
+            uint64_t layout { 0 }, explicitFull { 0 }, dirtyFallback { 0 }, slotFull { 0 };
+            uint64_t pixels { 0 }, paintLayoutMicros { 0 }, recordMicros { 0 }, submitMicros { 0 }, maxPaintMicros { 0 };
+            uint64_t ticks { 0 }, tickMicros { 0 }, maxTickMicros { 0 };
+            uint64_t requests { 0 }, requestMicros { 0 }, maxRequestMicros { 0 };
+        } counters;
+    } paintProfile;
     struct GpuSlot {
         std::unique_ptr<ScarletSkiaVulkan::Surface> surface;
         uint64_t lease { 0 };
@@ -248,6 +265,111 @@ void screenForView(ScarletWebView& view)
     view.loadState.viewport = rect;
     setScarletScreenConfiguration(rect, rect);
 }
+#if USE(SKIA)
+uint64_t profileMicroseconds(MonotonicTime start, MonotonicTime end)
+{
+    double micros = (end - start).microseconds();
+    if (!(micros > 0))
+        return 0;
+    if (micros >= static_cast<double>(UINT64_MAX))
+        return UINT64_MAX;
+    return static_cast<uint64_t>(micros);
+}
+
+void addProfileCounter(uint64_t& counter, uint64_t amount)
+{
+    counter = amount > UINT64_MAX - counter ? UINT64_MAX : counter + amount;
+}
+
+MonotonicTime beginProfile(ScarletWebView& view)
+{
+    if (!view.paintProfile.enabled)
+        return { };
+    auto start = MonotonicTime::now();
+    if (!view.paintProfile.started) {
+        view.paintProfile.started = true;
+        view.paintProfile.periodStart = start;
+    }
+    return start;
+}
+
+void reportProfile(ScarletWebView& view, MonotonicTime end)
+{
+    auto& profile = view.paintProfile;
+    // Begin before the work: even a single long first operation is reported.
+    if ((end - profile.periodStart).seconds() < 1.0)
+        return;
+    const auto& c = profile.counters;
+    auto printable = [](uint64_t value) { return static_cast<unsigned long long>(value); };
+    std::fprintf(stderr, "SCARLET_WEBVIEW_PROFILE view=%p size=%ux%u period_us=%llu attempts=%llu failed_submits=%llu full=%llu layout=%llu explicit_full=%llu dirty_fallback=%llu slot_full=%llu painted_pixels=%llu paint_layout_us=%llu record_us=%llu submit_us=%llu max_paint_us=%llu ticks=%llu tick_us=%llu max_tick_us=%llu complete_requests=%llu complete_request_us=%llu max_complete_request_us=%llu\n",
+        static_cast<void*>(&view), view.width, view.height, printable(profileMicroseconds(profile.periodStart, end)),
+        printable(c.attempts), printable(c.failedSubmits), printable(c.full), printable(c.layout), printable(c.explicitFull),
+        printable(c.dirtyFallback), printable(c.slotFull), printable(c.pixels), printable(c.paintLayoutMicros),
+        printable(c.recordMicros), printable(c.submitMicros), printable(c.maxPaintMicros), printable(c.ticks),
+        printable(c.tickMicros), printable(c.maxTickMicros), printable(c.requests), printable(c.requestMicros), printable(c.maxRequestMicros));
+    profile.counters = { };
+    profile.periodStart = end;
+}
+
+// tick includes the shared RunLoop cycle and Page rendering updates; request
+// completion includes synchronous resource callbacks (such as script execution).
+class ProfileOperation {
+public:
+    enum class Kind { Tick, CompleteRequest };
+    ProfileOperation(ScarletWebView& view, Kind kind)
+        : m_view(view), m_kind(kind), m_start(beginProfile(view)) { }
+    ~ProfileOperation()
+    {
+        if (!m_view.paintProfile.enabled)
+            return;
+        auto end = MonotonicTime::now();
+        auto elapsed = profileMicroseconds(m_start, end);
+        auto& c = m_view.paintProfile.counters;
+        auto& count = m_kind == Kind::Tick ? c.ticks : c.requests;
+        auto& total = m_kind == Kind::Tick ? c.tickMicros : c.requestMicros;
+        auto& maximum = m_kind == Kind::Tick ? c.maxTickMicros : c.maxRequestMicros;
+        addProfileCounter(count, 1);
+        addProfileCounter(total, elapsed);
+        if (elapsed > maximum)
+            maximum = elapsed;
+        reportProfile(m_view, end);
+    }
+private:
+    ScarletWebView& m_view;
+    Kind m_kind;
+    MonotonicTime m_start;
+};
+
+void recordPaintProfile(ScarletWebView& view, const IntRect& damage, bool neededLayout, bool explicitFull,
+    bool dirtyFallback, bool slotFull, bool submitted, MonotonicTime start, MonotonicTime layoutEnd,
+    MonotonicTime recordStart, MonotonicTime recordEnd, MonotonicTime end)
+{
+    auto& c = view.paintProfile.counters;
+    addProfileCounter(c.attempts, 1);
+    addProfileCounter(c.failedSubmits, !submitted);
+    addProfileCounter(c.full, damage == IntRect { IntPoint { }, cssSize(view) });
+    addProfileCounter(c.layout, neededLayout);
+    addProfileCounter(c.explicitFull, explicitFull);
+    addProfileCounter(c.dirtyFallback, dirtyFallback);
+    addProfileCounter(c.slotFull, slotFull);
+    FloatRect scaledDamage { damage };
+    scaledDamage.scale(view.scale);
+    auto physicalDamage = enclosingIntRect(scaledDamage);
+    physicalDamage.intersect(IntRect { 0, 0, static_cast<int>(view.width), static_cast<int>(view.height) });
+    if (submitted)
+        addProfileCounter(c.pixels, static_cast<uint64_t>(physicalDamage.width()) * physicalDamage.height());
+    // Page::updateRendering may already have laid out during tick. This measures
+    // only updateLayoutIgnorePendingStylesheets executed by this paint call.
+    addProfileCounter(c.paintLayoutMicros, profileMicroseconds(start, layoutEnd));
+    addProfileCounter(c.recordMicros, profileMicroseconds(recordStart, recordEnd));
+    addProfileCounter(c.submitMicros, profileMicroseconds(recordEnd, end));
+    auto elapsed = profileMicroseconds(start, end);
+    if (elapsed > c.maxPaintMicros)
+        c.maxPaintMicros = elapsed;
+    reportProfile(view, end);
+}
+#endif
+
 int32_t paint(ScarletWebView& view)
 {
     RefPtr frameView = view.frame->view();
@@ -257,7 +379,15 @@ int32_t paint(ScarletWebView& view)
     if (!view.loadState.needsPaint && !frameView->needsLayout() && view.surface)
         return SWV_OK;
     bool neededLayout = frameView->needsLayout();
+#if USE(SKIA)
+    auto profileStart = beginProfile(view);
+    MonotonicTime profileLayoutEnd, profileRecordStart, profileRecordEnd;
+#endif
     document->updateLayoutIgnorePendingStylesheets();
+#if USE(SKIA)
+    if (view.paintProfile.enabled)
+        profileLayoutEnd = MonotonicTime::now();
+#endif
     if (!frameView->renderView())
         return SWV_EMPTY;
     if (frameView->needsLayout() || !frameView->layoutContext().inPaintableState())
@@ -275,8 +405,9 @@ int32_t paint(ScarletWebView& view)
     if (!target || target->lease) return SWV_FAILED;
     // Layout may generate more damage. Fan it out only after layout and before
     // consuming the global invalidation, including slots leased by the UI.
-    bool fullPaint = neededLayout || view.loadState.fullPaint
-        || (view.loadState.needsPaint && view.loadState.dirtyRect.isEmpty());
+    bool explicitFullPaint = view.loadState.fullPaint;
+    bool dirtyFallback = view.loadState.needsPaint && view.loadState.dirtyRect.isEmpty();
+    bool fullPaint = neededLayout || explicitFullPaint || dirtyFallback;
     for (auto& slot : view.gpuSlots) {
         if (fullPaint) {
             slot.pendingFullPaint = true;
@@ -284,6 +415,7 @@ int32_t paint(ScarletWebView& view)
         } else if (!slot.pendingFullPaint)
             slot.pendingDamage.unite(view.loadState.dirtyRect);
     }
+    bool targetFullPaint = target->pendingFullPaint;
     if (!target->pendingFullPaint)
         damage.intersect(target->pendingDamage);
 #else
@@ -303,6 +435,8 @@ int32_t paint(ScarletWebView& view)
     }
 #if USE(SKIA)
     if (!view.surface) return SWV_FAILED;
+    if (view.paintProfile.enabled)
+        profileRecordStart = MonotonicTime::now();
     {
         GraphicsContextSkia context(*view.surface->skSurface().getCanvas(), RenderingMode::Accelerated, RenderingPurpose::DOM);
         context.save();
@@ -312,8 +446,14 @@ int32_t paint(ScarletWebView& view)
         frameView->paint(context, damage);
         context.restore();
     }
+    if (view.paintProfile.enabled)
+        profileRecordEnd = MonotonicTime::now();
     auto device = PlatformDisplay::sharedDisplay().skiaVulkanContext();
-    if (!device || !device->submit(*view.surface)) {
+    bool submitted = device && device->submit(*view.surface);
+    if (view.paintProfile.enabled)
+        recordPaintProfile(view, damage, neededLayout, explicitFullPaint, dirtyFallback, targetFullPaint,
+            submitted, profileStart, profileLayoutEnd, profileRecordStart, profileRecordEnd, MonotonicTime::now());
+    if (!submitted) {
         view.loadState.error = "WebCore Vulkan page submission failed."_s;
         return SWV_FAILED;
     }
@@ -723,6 +863,9 @@ extern "C" int32_t scarlet_webview_tick(ScarletWebView* view)
     auto status = viewStatus(view);
     if (status != SWV_OK)
         return status;
+#if USE(SKIA)
+    ProfileOperation profile(*view, ProfileOperation::Kind::Tick);
+#endif
     screenForView(*view);
     WTF::RunLoop::cycle();
     // This runs real animation frame callbacks, timelines, resize/scroll
@@ -1028,6 +1171,9 @@ extern "C" int32_t scarlet_webview_complete_request(ScarletWebView* view, const 
         return status;
     if (!response)
         return SWV_INVALID_ARGUMENT;
+#if USE(SKIA)
+    ProfileOperation profile(*view, ProfileOperation::Kind::CompleteRequest);
+#endif
     auto result = completeScarletLiveRequest(*view->page, *response);
     if (result == SWV_OK || result == SWV_FAILED)
         view->loadState.needsRenderingUpdate = true;
