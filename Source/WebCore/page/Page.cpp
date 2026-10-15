@@ -2295,8 +2295,8 @@ public:
             return;
         auto elapsed = MonotonicTime::now() - m_started;
         if (elapsed >= 8_ms)
-            std::fprintf(stderr, "SCARLET_RENDERING_STEP phase=%s step=%llu elapsed_us=%.0f\n",
-                m_phase, static_cast<unsigned long long>(m_step), elapsed.microseconds());
+            std::fprintf(stderr, "SCARLET_RENDERING_STEP phase=%s step=%llu elapsed_us=%llu\n",
+                m_phase, static_cast<unsigned long long>(m_step), static_cast<unsigned long long>(elapsed.microseconds()));
     }
 
 private:
