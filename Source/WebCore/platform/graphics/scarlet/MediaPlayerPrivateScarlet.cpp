@@ -688,6 +688,19 @@ struct MediaPlayerPrivateScarlet::VideoFramePump {
         , timer(loop, "ScarletVideoFramePump"_s, [this] { poll(); })
         , session(s), proxy(p), serial(media.m_videoFrameSerial)
     { }
+    void setPresentationFeedback(CoordinatedPlatformLayerBufferSkiaImage& buffer, uint64_t serial, double mediaTime, const FloatSize& size)
+    {
+        buffer.setPresentationCallback([feedback = feedback, serial = serial, mediaTime, size](MonotonicTime time) {
+            // A bounded latest-value mailbox replaces per-frame owner dispatch.
+            // No DOM/media object is retained or accessed by the compositor.
+            std::lock_guard lock(feedback->mutex);
+            ++feedback->latest.presentedCount;
+            feedback->latest.presentedSerial = serial;
+            feedback->latest.presentedMediaTime = mediaTime;
+            feedback->latest.presentedSize = size;
+            feedback->latest.presentedAt = time;
+        });
+    }
     void poll()
     {
         RELEASE_ASSERT(!isMainThread());
@@ -705,16 +718,7 @@ struct MediaPlayerPrivateScarlet::VideoFramePump {
         ++serial;
         auto buffer = makeUnique<CoordinatedPlatformLayerBufferSkiaImage>(sk_sp { image },
             CoordinatedPlatformLayerBuffer::AlphaMode::Opaque, CoordinatedPlatformLayerBuffer::Rotation::None);
-        buffer->setPresentationCallback([feedback = feedback, serial = serial, mediaTime, size](MonotonicTime time) {
-            // A bounded latest-value mailbox replaces per-frame owner dispatch.
-            // No DOM/media object is retained or accessed by the compositor.
-            std::lock_guard lock(feedback->mutex);
-            ++feedback->latest.presentedCount;
-            feedback->latest.presentedSerial = serial;
-            feedback->latest.presentedMediaTime = mediaTime;
-            feedback->latest.presentedSize = size;
-            feedback->latest.presentedAt = time;
-        });
+        setPresentationFeedback(*buffer, serial, mediaTime, size);
         proxy->setDisplayBuffer(WTF::move(buffer));
         std::lock_guard lock(feedback->mutex);
         feedback->latest.serial = serial;
@@ -985,6 +989,7 @@ bool MediaPlayerPrivateScarlet::pushFrameToCompositor()
         if (auto surface = SkSurfaces::RenderTarget(context, skgpu::Budgeted::kYes, info)) {
             surface->getCanvas()->drawImage(image, 0, 0);
             auto buffer = CoordinatedPlatformLayerBufferSkiaImage::create(surface->makeImageSnapshot(), m_contentsBufferProxy->threadSafeGrContext());
+            m_framePump->setPresentationFeedback(*buffer, m_videoFrameSerial, m_frameMediaTime, m_size);
             m_contentsBufferProxy->setDisplayBuffer(WTF::move(buffer));
         }
     }
