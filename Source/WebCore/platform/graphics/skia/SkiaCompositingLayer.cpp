@@ -1353,7 +1353,12 @@ static std::optional<TransformationMatrix> inverseLayerPlaneTransform(const Tran
 
 static int maxFilterSurfaceSize()
 {
-    return PlatformDisplay::sharedDisplay().skiaGrContext()->maxTextureSize() / 2;
+    auto* context = PlatformDisplay::sharedDisplay().skiaGrContext();
+#if PLATFORM(SCARLET)
+    return std::min(context->maxTextureSize(), context->maxRenderTargetSize());
+#else
+    return context->maxTextureSize() / 2;
+#endif
 }
 
 template<typename BoundsFunction>
@@ -1368,21 +1373,34 @@ static FloatRect filterSourceBounds(const SkCanvas& canvas, const Transformation
     if (clipBounds.isEmpty())
         return { };
 
+#if PLATFORM(SCARLET)
+    UNUSED_PARAM(scale);
+#else
     const int maxSurfaceSize = maxFilterSurfaceSize();
     auto fitsSurface = [&](const FloatRect& bounds) {
         return bounds.width() * scale.width() <= maxSurfaceSize && bounds.height() * scale.height() <= maxSurfaceSize;
     };
+#endif
 
     // Like Chromium, also include the content outside the visible part that the filter reads, for example
     // content whose drop shadow falls into the visible part. If that is too large, use the visible part only.
     const auto reach = filter.filterBounds(clipBounds, SkMatrix::I(), SkImageFilter::kReverse_MapDirection);
     if (reach.width64() <= std::numeric_limits<int>::max() && reach.height64() <= std::numeric_limits<int>::max()) {
         const FloatRect bounds = boundsWithinClip(IntRect(reach));
+#if PLATFORM(SCARLET)
+        // Preserve every input pixel the visible filter output can read.
+        // Oversized inputs are fitted uniformly below, never cropped here.
+        return bounds;
+#else
         if (fitsSurface(bounds))
             return bounds;
+#endif
     }
 
     const FloatRect bounds = boundsWithinClip(clipBounds);
+#if PLATFORM(SCARLET)
+    return bounds;
+#else
     if (fitsSurface(bounds))
         return bounds;
 
@@ -1390,6 +1408,7 @@ static FloatRect filterSourceBounds(const SkCanvas& canvas, const Transformation
     return boundsWithinClip(layerPlaneClipBounds(*deviceToLayer, deviceClip, [&](const IntRect& clipBounds) {
         return fitsSurface(intersection(bounds, FloatRect(clipBounds)));
     }));
+#endif
 }
 
 void SkiaCompositingLayer::paintBackdrop(SkCanvas& canvas, PaintContext& context)
@@ -1512,16 +1531,89 @@ static std::optional<SkMatrix> computeDeviceAlignedSurfaceTransform(const Transf
     return matrix;
 }
 
+#if PLATFORM(SCARLET)
+struct ScarletFilterSurfaceGeometry {
+    FloatSize scale;
+    std::optional<SkMatrix> deviceAlignedTransform;
+    SkMatrix layerToScaled;
+    IntRect sourceRect;
+    IntRect outputRect;
+    sk_sp<SkImageFilter> filter;
+};
+
+// Fit both the full input and the visible output before allocating any GPU
+// texture. The existing layer-plane path maps a smaller surface back to its
+// original geometry, so an oversized filter loses resolution rather than area.
+static std::optional<ScarletFilterSurfaceGeometry> scarletFilterSurfaceGeometry(
+    const FloatRect& localBounds, const FloatRect& localClip, FloatSize scale,
+    std::optional<SkMatrix> deviceAlignedTransform, const SkImageFilter& originalFilter, int maxSize)
+{
+    // Rounding a fractional origin and extent can add two pixels.
+    const float available = maxSize - 2;
+    if (!(available > 0) || !(scale.width() > 0) || !(scale.height() > 0)
+        || !std::isfinite(scale.width()) || !std::isfinite(scale.height()))
+        return std::nullopt;
+    for (unsigned attempt = 0; attempt < 16; ++attempt) {
+        auto layerToScaled = deviceAlignedTransform.value_or(SkMatrix::Scale(scale.width(), scale.height()));
+        const SkRect scaledBounds = layerToScaled.mapRect(SkRect(localBounds));
+        if (!scaledBounds.isFinite() || scaledBounds.isEmpty())
+            return std::nullopt;
+        float ratio = std::min(available / scaledBounds.width(), available / scaledBounds.height());
+        if (ratio >= 1) {
+            const IntRect sourceRect = enclosingIntRect(FloatRect(scaledBounds));
+            if (sourceRect.isEmpty())
+                return std::nullopt;
+            auto layerToSurface = layerToScaled;
+            layerToSurface.postTranslate(-sourceRect.x(), -sourceRect.y());
+            auto filter = originalFilter.makeWithLocalMatrix(layerToSurface);
+            if (!filter)
+                return std::nullopt;
+            const auto sourceBounds = SkRect::MakeIWH(sourceRect.width(), sourceRect.height());
+            auto outputBounds = filter->computeFastBounds(sourceBounds);
+            auto clip = layerToSurface.mapRect(SkRect(localClip));
+            if (!outputBounds.isFinite() || !clip.isFinite() || !outputBounds.intersect(clip))
+                return std::nullopt;
+            ratio = std::min(available / outputBounds.width(), available / outputBounds.height());
+            if (ratio >= 1) {
+                const IntRect outputRect = enclosingIntRect(FloatRect(outputBounds));
+                if (sourceRect.width() <= maxSize && sourceRect.height() <= maxSize
+                    && outputRect.width() <= maxSize && outputRect.height() <= maxSize)
+                    return ScarletFilterSurfaceGeometry { scale, deviceAlignedTransform, layerToScaled, sourceRect, outputRect, WTF::move(filter) };
+            }
+        }
+        if (!(ratio > 0) || !std::isfinite(ratio))
+            return std::nullopt;
+        // Keep the same aspect ratio and filter coordinates. A tiny safety
+        // reduction also guarantees progress at a floating-point boundary.
+        ratio = std::min(ratio, .99f);
+        scale.scale(ratio);
+        deviceAlignedTransform.reset();
+    }
+    return std::nullopt;
+}
+#endif
+
 void SkiaCompositingLayer::paintWithFilter(SkCanvas& canvas, PaintContext& context, const TransformationMatrix& layerTransform, const TransformationMatrix& inverseLayerTransform, const FloatRect& localBounds, const SkPaint& layerPaint, FilterSurfaceAlignment alignment, NOESCAPE const PaintFunction& paintFunction)
 {
     // Like Chromium, paint the subtree into a surface in the layer plane at a fixed scale, filter it there and
     // draw the result with the layer transform. SkCanvas::saveLayer() would pick the layer resolution at the
     // center of the bounds instead, which under a perspective can be far off the resolution anywhere else.
     auto* grContext = PlatformDisplay::sharedDisplay().skiaGrContext();
-    const auto scale = filterSurfaceScale(context);
+    auto scale = filterSurfaceScale(context);
 
     // Align the surface with the device pixels if possible, so the result needs no resampling.
-    const auto deviceAlignedTransform = alignment == FilterSurfaceAlignment::DevicePixels ? computeDeviceAlignedSurfaceTransform(TransformationMatrix(canvas.getLocalToDevice()).multiply(layerTransform), localBounds) : std::nullopt;
+    auto deviceAlignedTransform = alignment == FilterSurfaceAlignment::DevicePixels ? computeDeviceAlignedSurfaceTransform(TransformationMatrix(canvas.getLocalToDevice()).multiply(layerTransform), localBounds) : std::nullopt;
+#if PLATFORM(SCARLET)
+    const auto deviceToLayer = inverseLayerPlaneTransform(TransformationMatrix(canvas.getLocalToDevice()).multiply(layerTransform));
+    const auto localClip = deviceToLayer ? FloatRect(layerPlaneClipBounds(*deviceToLayer, FloatRect(canvas.getDeviceClipBounds()))) : FloatRect();
+    auto geometry = scarletFilterSurfaceGeometry(localBounds, localClip, scale, deviceAlignedTransform, *layerPaint.refImageFilter(), maxFilterSurfaceSize());
+    if (!geometry)
+        return;
+    scale = geometry->scale;
+    deviceAlignedTransform = geometry->deviceAlignedTransform;
+    const auto layerToScaled = geometry->layerToScaled;
+    const auto surfaceRect = geometry->sourceRect;
+#else
     const auto layerToScaled = deviceAlignedTransform.value_or(SkMatrix::Scale(scale.width(), scale.height()));
     const FloatRect scaledBounds = layerToScaled.mapRect(localBounds);
 
@@ -1532,6 +1624,7 @@ void SkiaCompositingLayer::paintWithFilter(SkCanvas& canvas, PaintContext& conte
     surfaceRect.setHeight(std::min(surfaceRect.height(), maxSurfaceSize));
     if (surfaceRect.isEmpty())
         return;
+#endif
 
     auto imageInfo = SkImageInfo::Make(surfaceRect.width(), surfaceRect.height(), kRGBA_8888_SkColorType, kPremul_SkAlphaType, SkColorSpace::MakeSRGB());
 #if PLATFORM(SCARLET)
@@ -1560,6 +1653,11 @@ void SkiaCompositingLayer::paintWithFilter(SkCanvas& canvas, PaintContext& conte
         context.imageSetBatch.flushIfNeeded(*surfaceCanvas);
     }
 
+#if PLATFORM(SCARLET)
+    const auto sourceBounds = SkRect::MakeIWH(surfaceRect.width(), surfaceRect.height());
+    auto filter = geometry->filter;
+    const auto outputRect = geometry->outputRect;
+#else
     // Filter parameters are in layer units, the surface is in scaled pixels relative to its origin.
     auto layerToSurface = layerToScaled;
     layerToSurface.postTranslate(-surfaceRect.x(), -surfaceRect.y());
@@ -1576,6 +1674,7 @@ void SkiaCompositingLayer::paintWithFilter(SkCanvas& canvas, PaintContext& conte
     outputRect.setHeight(std::min(outputRect.height(), maxSurfaceSize));
     if (outputRect.isEmpty())
         return;
+#endif
 
     SkIRect filteredSubset;
     SkIPoint filteredOffset;
