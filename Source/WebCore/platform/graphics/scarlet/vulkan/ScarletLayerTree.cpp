@@ -224,7 +224,7 @@ bool ScarletLayerTree::paint(SkCanvas& canvas, std::optional<Damage>& frameDamag
         ++paints;
         prepareMicros += static_cast<uint64_t>(std::max(0.0, (end - profileStart).microseconds()));
         if ((end - periodStart).seconds() >= 1) {
-            std::fprintf(stderr, "SCARLET_SCENE_CONTEXT_PROFILE tree=%p period_us=%llu paints=%llu prepare_us=%llu\\n",
+            std::fprintf(stderr, "SCARLET_SCENE_CONTEXT_PROFILE tree=%p period_us=%llu paints=%llu prepare_us=%llu\n",
                 static_cast<void*>(this), static_cast<unsigned long long>((end - periodStart).microseconds()),
                 static_cast<unsigned long long>(paints), static_cast<unsigned long long>(prepareMicros));
             periodStart = end;

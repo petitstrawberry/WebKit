@@ -1246,6 +1246,10 @@ static void clipRectIgnoringCanvasMatrix(SkCanvas& canvas, const IntRect& rect)
     canvas.setMatrix(matrix);
 }
 
+// Scarlet records the entire scene on one owner-thread GrDirectContext and
+// submits it once from ScarletSkiaVulkan::submitAsync. Snapshot images retain
+// their proxies, and Ganesh render-task dependencies order intermediate writes
+// before their consumers without an early flush or submission.
 sk_sp<SkImage> SkiaCompositingLayer::maskImage()
 {
     if (m_maskImage)
@@ -1277,7 +1281,9 @@ sk_sp<SkImage> SkiaCompositingLayer::maskImage()
     SkPaint paint;
     surfaceCanvas->scale(scale, scale);
     m_backingStore->paintToCanvas(*surfaceCanvas, paint);
+#if !PLATFORM(SCARLET)
     grContext->flushAndSubmit(surface.get(), GrSyncCpu::kNo);
+#endif
     m_maskImage = surface->makeImageSnapshot();
     return m_maskImage;
 }
@@ -1325,7 +1331,9 @@ void SkiaCompositingLayer::paintWithIntermediateSurface(SkCanvas& canvas, PaintC
         paintFunction(*surfaceCanvas, context);
         context.imageSetBatch.flushIfNeeded(*surfaceCanvas);
     }
+#if !PLATFORM(SCARLET)
     grContext->flushAndSubmit(surface.get(), GrSyncCpu::kNo);
+#endif
 
     auto snapshot = surface->makeImageSnapshot();
 
@@ -1597,9 +1605,11 @@ void SkiaCompositingLayer::paintWithFilter(SkCanvas& canvas, PaintContext& conte
         canvas.drawImageRect(filtered.get(), SkRect::Make(filteredSubset), destinationRect, sampling, &paint, SkCanvas::kStrict_SrcRectConstraint);
     }
 
+#if !PLATFORM(SCARLET)
     // The render tasks are now recorded -- submit them to the GPU now, instead of
     // waiting for the final flushAndSubmit() once the full layer tree finished painting.
     grContext->flush();
+#endif
 }
 
 static std::optional<FloatSize> transform2DScaleComponents(const TransformationMatrix& transform)
