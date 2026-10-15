@@ -1011,6 +1011,11 @@ extern "C" int32_t scarlet_webview_create(const SWVConfiguration* configuration,
     settings.setScriptEnabled(configuration->script_enabled);
     settings.setImagesEnabled(true);
     settings.setLoadsImagesAutomatically(true);
+#if USE(SKIA)
+    // Match the standard WebKit embedder preference; Canvas retains its
+    // willReadFrequently and minimum-area choices when allocating a buffer.
+    settings.setCanvasUsesAcceleratedDrawing(true);
+#endif
     settings.setUseUIProcessForBackForwardItemLoading(false);
     settings.setLocalStorageEnabled(true);
     settings.setSessionStorageEnabled(true);
