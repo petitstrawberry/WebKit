@@ -56,7 +56,11 @@ enum class AccessType : int8_t;
 enum class CacheType : int8_t;
 enum class JITType : uint8_t;
 
+#if ENABLE(DFG_JIT)
 using CompileTimePropertyInlineCache = Variant<PropertyInlineCache*, BaselineUnlinkedPropertyInlineCache*, DFG::UnlinkedPropertyInlineCache*>;
+#else
+using CompileTimePropertyInlineCache = Variant<PropertyInlineCache*, BaselineUnlinkedPropertyInlineCache*>;
+#endif
 
 class JITInlineCacheGenerator {
 protected:
