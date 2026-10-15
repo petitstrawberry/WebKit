@@ -46,7 +46,7 @@ struct Dispatch {
 // pools its vertex/uniform/staging buffers. Unsupported properties fail instead
 // of claiming protected/lazy or noncoherent allocations were honored.
 class Allocator final : public skgpu::VulkanMemoryAllocator {
-    struct Allocation { skgpu::VulkanAlloc info; void* mapped { }; };
+    struct Allocation { skgpu::VulkanAlloc info; void* mapped { }; bool persistentlyMapped { false }; };
 public:
     Allocator(Dispatch dispatch, VkPhysicalDevice physical) : m_dispatch(dispatch)
     { dispatch.instanceFunction<PFN_vkGetPhysicalDeviceMemoryProperties>("vkGetPhysicalDeviceMemoryProperties")(physical, &m_properties); }
@@ -79,6 +79,10 @@ public:
     void unmapMemory(const skgpu::VulkanBackendMemory& memory) override
     {
         auto& allocation = *reinterpret_cast<Allocation*>(memory);
+        // Ganesh's transfer buffers request a mapping that remains valid until
+        // allocation destruction, including across staging-buffer reuse.
+        if (allocation.persistentlyMapped)
+            return;
         if (allocation.mapped) {
             m_dispatch.deviceFunction<PFN_vkUnmapMemory>("vkUnmapMemory")(m_dispatch.device, allocation.info.fMemory);
             allocation.mapped = nullptr;
@@ -87,6 +91,8 @@ public:
     void freeMemory(const skgpu::VulkanBackendMemory& memory) override
     {
         auto* allocation = reinterpret_cast<Allocation*>(memory);
+        // Final destruction also retires a persistent mapping, exactly once.
+        allocation->persistentlyMapped = false;
         unmapMemory(memory);
         m_dispatch.deviceFunction<PFN_vkFreeMemory>("vkFreeMemory")(m_dispatch.device, allocation->info.fMemory, nullptr);
         m_bytes -= allocation->info.fSize;
@@ -107,6 +113,7 @@ private:
             info.allocationSize = requirements.size;
             info.memoryTypeIndex = type;
             auto allocation = std::make_unique<Allocation>();
+            allocation->persistentlyMapped = flags & kPersistentlyMapped_AllocationPropertyFlag;
             auto result = m_dispatch.deviceFunction<PFN_vkAllocateMemory>("vkAllocateMemory")(m_dispatch.device, &info, nullptr, &allocation->info.fMemory);
             if (result != VK_SUCCESS) return result;
             allocation->info.fSize = requirements.size;
@@ -115,7 +122,7 @@ private:
             *memory = reinterpret_cast<skgpu::VulkanBackendMemory>(raw);
             raw->info.fBackendMemory = *memory;
             m_bytes += requirements.size;
-            if (flags & kPersistentlyMapped_AllocationPropertyFlag) {
+            if (raw->persistentlyMapped) {
                 void* pointer;
                 result = mapMemory(*memory, &pointer);
                 if (result != VK_SUCCESS) { freeMemory(*memory); *memory = 0; return result; }
