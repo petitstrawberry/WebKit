@@ -675,6 +675,16 @@ struct MediaPlayerPrivateScarlet::VideoFramePump {
         MonotonicTime presentedAt;
     };
     struct Feedback { std::mutex mutex; Snapshot latest; };
+    static void deliverFeedback(MediaPlayerPrivateScarlet& media, const Snapshot& state)
+    {
+        RELEASE_ASSERT(isMainThread());
+        if (state.presentedCount > media.m_pumpPresentedCount && state.presentedSerial > media.m_paintedVideoFrameSerial) {
+            media.m_presentedVideoFrames += state.presentedCount - media.m_pumpPresentedCount - 1;
+            media.didPresentVideoFrame(state.presentedSerial, state.presentedMediaTime, state.presentedSize, state.presentedAt);
+        }
+        media.m_pumpPresentedCount = state.presentedCount;
+    }
+
     Ref<RunLoop> runLoop;
     RunLoop::Timer timer;
     ScarletMediaSession* session;
@@ -750,10 +760,12 @@ struct MediaPlayerPrivateScarlet::VideoFramePump {
 void MediaPlayerPrivateScarlet::stopFramePump(bool preserveImage)
 {
     if (!m_framePump) return;
+    auto state = m_framePump->snapshot();
+    VideoFramePump::deliverFeedback(*this, state);
+    m_videoFrameSerial = std::max(m_videoFrameSerial, state.serial);
     if (preserveImage) {
         // A paused/reparented video must retain its last compositor frame,
         // not the initial owner preview. This is a GPU-only immutable snapshot.
-        auto state = m_framePump->snapshot();
         if (auto* context = PlatformDisplay::sharedDisplay().skiaGrContext()) {
             if (auto image = m_framePump->snapshotForOwner(context->threadSafeProxy())) {
                 m_image = NativeImage::create(WTF::move(image), context);
@@ -796,11 +808,7 @@ void MediaPlayerPrivateScarlet::updateFrame()
     if (m_framePump) {
         auto state = m_framePump->snapshot();
         if (state.failed) { fail(MediaPlayer::NetworkState::DecodeError); return; }
-        if (state.presentedCount > m_pumpPresentedCount && state.presentedSerial > m_paintedVideoFrameSerial) {
-            m_presentedVideoFrames += state.presentedCount - m_pumpPresentedCount - 1;
-            didPresentVideoFrame(state.presentedSerial, state.presentedMediaTime, state.presentedSize, state.presentedAt);
-        }
-        m_pumpPresentedCount = state.presentedCount;
+        VideoFramePump::deliverFeedback(*this, state);
         if (state.serial > m_videoFrameSerial) {
             m_videoFrameSerial = state.serial;
             m_frameMediaTime = state.mediaTime;
@@ -864,6 +872,9 @@ unsigned MediaPlayerPrivateScarlet::droppedFrameCount() const
 }
 std::optional<VideoPlaybackQualityMetrics> MediaPlayerPrivateScarlet::videoPlaybackQualityMetrics()
 {
+#if USE(COORDINATED_GRAPHICS)
+    if (m_framePump) VideoFramePump::deliverFeedback(*this, m_framePump->snapshot());
+#endif
     auto status = statusSnapshot();
     return VideoPlaybackQualityMetrics {
         boundedFrameCount(status.decoded_frames),
@@ -874,6 +885,9 @@ std::optional<VideoPlaybackQualityMetrics> MediaPlayerPrivateScarlet::videoPlayb
 }
 std::optional<VideoFrameMetadata> MediaPlayerPrivateScarlet::videoFrameMetadata()
 {
+#if USE(COORDINATED_GRAPHICS)
+    if (m_framePump) VideoFramePump::deliverFeedback(*this, m_framePump->snapshot());
+#endif
     return std::exchange(m_videoFrameMetadata, std::nullopt);
 }
 RefPtr<NativeImage> MediaPlayerPrivateScarlet::nativeImageForCurrentTime()
@@ -898,6 +912,9 @@ void MediaPlayerPrivateScarlet::paint(GraphicsContext& context, const FloatRect&
     if (!image || context.paintingDisabled())
         return;
     context.drawNativeImage(*image, rectangle, FloatRect { FloatPoint { }, m_size });
+#if USE(COORDINATED_GRAPHICS)
+    if (m_framePump) return; // Its successful GPU submission supplies feedback.
+#endif
     didPresentVideoFrame(m_videoFrameSerial, m_frameMediaTime, m_size, MonotonicTime::now());
 }
 
@@ -989,7 +1006,8 @@ bool MediaPlayerPrivateScarlet::pushFrameToCompositor()
         if (auto surface = SkSurfaces::RenderTarget(context, skgpu::Budgeted::kYes, info)) {
             surface->getCanvas()->drawImage(image, 0, 0);
             auto buffer = CoordinatedPlatformLayerBufferSkiaImage::create(surface->makeImageSnapshot(), m_contentsBufferProxy->threadSafeGrContext());
-            m_framePump->setPresentationFeedback(*buffer, m_videoFrameSerial, m_frameMediaTime, m_size);
+            if (m_videoFrameSerial > m_paintedVideoFrameSerial)
+                m_framePump->setPresentationFeedback(*buffer, m_videoFrameSerial, m_frameMediaTime, m_size);
             m_contentsBufferProxy->setDisplayBuffer(WTF::move(buffer));
         }
     }
