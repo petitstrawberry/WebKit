@@ -317,6 +317,46 @@ void screenForView(ScarletWebView& view)
     view.loadState.viewport = rect;
     setScarletScreenConfiguration(rect, rect);
 }
+#if ENABLE(VIDEO)
+// These getters inspect the existing DOM/player only. In particular, the 1Hz
+// work profile must not measure itself by triggering layout for client rects.
+RefPtr<HTMLVideoElement> mediaElementAt(ScarletWebView& view, uint32_t index, uint32_t& videoCount)
+{
+    videoCount = 0;
+    RefPtr document = view.frame ? view.frame->document() : nullptr;
+    if (!document)
+        return nullptr;
+    auto elements = document->getElementsByTagName(AtomString { "video"_s });
+    RefPtr<HTMLVideoElement> video;
+    for (unsigned i = 0; i < elements->length(); ++i) {
+        RefPtr candidate = dynamicDowncast<HTMLVideoElement>(elements->item(i));
+        if (!candidate)
+            continue;
+        if (videoCount == index)
+            video = candidate;
+        ++videoCount;
+    }
+    return video;
+}
+
+void collectMediaCounters(HTMLVideoElement& video, ScarletWebViewMediaStatistics& out)
+{
+    out.width = video.videoWidth();
+    out.height = video.videoHeight();
+    out.paused = video.paused();
+    out.ended = video.ended();
+    out.ready_state = static_cast<uint32_t>(video.readyState());
+    out.current_time = video.currentTime();
+    out.duration = video.duration();
+    if (RefPtr player = video.player()) {
+        out.decoded_frames = player->decodedFrameCount();
+        out.dropped_frames = player->droppedFrameCount();
+        if (auto metrics = player->videoPlaybackQualityMetrics())
+            out.presented_frames = metrics->displayCompositedVideoFrames;
+    }
+}
+#endif
+
 #if USE(SKIA)
 uint64_t profileMicroseconds(MonotonicTime start, MonotonicTime end)
 {
@@ -349,18 +389,29 @@ void reportProfile(ScarletWebView& view, MonotonicTime end)
 {
     auto& profile = view.paintProfile;
     // Begin before the work: even a single long first operation is reported.
-    if ((end - profile.periodStart).seconds() < 1.0)
+    if (!profile.enabled || (end - profile.periodStart).seconds() < 1.0)
         return;
+    ScarletWebViewMediaStatistics media { };
+#if ENABLE(VIDEO)
+    if (RefPtr video = mediaElementAt(view, 0, media.video_count))
+        collectMediaCounters(*video, media);
+#endif
+    String mediaTime = "none"_s;
+    if (media.video_count)
+        mediaTime = String::number(media.current_time);
+    auto mediaTimeBytes = mediaTime.utf8();
     const auto& c = profile.counters;
     auto printable = [](uint64_t value) { return static_cast<unsigned long long>(value); };
-    std::fprintf(stderr, "SCARLET_WEBVIEW_PROFILE view=%p size=%ux%u period_us=%llu attempts=%llu failed_submits=%llu full=%llu layout=%llu explicit_full=%llu dirty_fallback=%llu slot_full=%llu painted_pixels=%llu paint_layout_us=%llu record_us=%llu submit_us=%llu max_paint_us=%llu ticks=%llu tick_us=%llu max_tick_us=%llu runloop_us=%llu rendering_update_us=%llu rendering_finalize_us=%llu scene_flush_us=%llu complete_requests=%llu complete_request_us=%llu max_complete_request_us=%llu gpu_completions=%llu gpu_completion_us=%llu max_gpu_completion_us=%llu\n",
+    std::fprintf(stderr, "SCARLET_WEBVIEW_PROFILE view=%p size=%ux%u period_us=%llu attempts=%llu failed_submits=%llu full=%llu layout=%llu explicit_full=%llu dirty_fallback=%llu slot_full=%llu painted_pixels=%llu paint_layout_us=%llu record_us=%llu submit_us=%llu max_paint_us=%llu ticks=%llu tick_us=%llu max_tick_us=%llu runloop_us=%llu rendering_update_us=%llu rendering_finalize_us=%llu scene_flush_us=%llu complete_requests=%llu complete_request_us=%llu max_complete_request_us=%llu gpu_completions=%llu gpu_completion_us=%llu max_gpu_completion_us=%llu video_index=0 video_count=%u video_width=%u video_height=%u video_decoded=%llu video_dropped=%llu video_presented=%llu video_time=%s\n",
         static_cast<void*>(&view), view.width, view.height, printable(profileMicroseconds(profile.periodStart, end)),
         printable(c.attempts), printable(c.failedSubmits), printable(c.full), printable(c.layout), printable(c.explicitFull),
         printable(c.dirtyFallback), printable(c.slotFull), printable(c.pixels), printable(c.paintLayoutMicros),
         printable(c.recordMicros), printable(c.submitMicros), printable(c.maxPaintMicros), printable(c.ticks),
         printable(c.tickMicros), printable(c.maxTickMicros), printable(c.runLoopMicros), printable(c.renderingUpdateMicros),
         printable(c.renderingFinalizeMicros), printable(c.sceneFlushMicros), printable(c.requests), printable(c.requestMicros), printable(c.maxRequestMicros),
-        printable(c.gpuCompletions), printable(c.gpuCompletionMicros), printable(c.maxGpuCompletionMicros));
+        printable(c.gpuCompletions), printable(c.gpuCompletionMicros), printable(c.maxGpuCompletionMicros),
+        media.video_count, media.width, media.height, printable(media.decoded_frames),
+        printable(media.dropped_frames), printable(media.presented_frames), mediaTimeBytes.data());
     profile.counters = { };
     profile.periodStart = end;
 }
@@ -1609,42 +1660,18 @@ extern "C" int32_t scarlet_webview_media_statistics(ScarletWebView* view, uint32
         return SWV_INVALID_ARGUMENT;
     *out = { };
 #if ENABLE(VIDEO)
-    RefPtr document = view->frame->document();
-    if (!document)
-        return SWV_EMPTY;
-    auto elements = document->getElementsByTagName(AtomString { "video"_s });
-    RefPtr<HTMLVideoElement> video;
-    for (unsigned i = 0; i < elements->length(); ++i) {
-        RefPtr candidate = dynamicDowncast<HTMLVideoElement>(elements->item(i));
-        if (!candidate)
-            continue;
-        if (out->video_count == index)
-            video = candidate;
-        ++out->video_count;
-    }
+    RefPtr video = mediaElementAt(*view, index, out->video_count);
     if (!out->video_count)
         return SWV_EMPTY;
     if (!video)
         return SWV_INVALID_ARGUMENT;
     reportMediaProfile(*view, *video, index);
-    out->width = video->videoWidth();
-    out->height = video->videoHeight();
-    out->paused = video->paused();
-    out->ended = video->ended();
-    out->ready_state = static_cast<uint32_t>(video->readyState());
-    out->current_time = video->currentTime();
-    out->duration = video->duration();
+    collectMediaCounters(*video, *out);
     auto rectangle = video->getBoundingClientRect();
     out->rect_x = rectangle->x();
     out->rect_y = rectangle->y();
     out->rect_width = rectangle->width();
     out->rect_height = rectangle->height();
-    if (RefPtr player = video->player()) {
-        out->decoded_frames = player->decodedFrameCount();
-        out->dropped_frames = player->droppedFrameCount();
-        if (auto metrics = player->videoPlaybackQualityMetrics())
-            out->presented_frames = metrics->displayCompositedVideoFrames;
-    }
     return SWV_OK;
 #else
     return SWV_UNSUPPORTED;
