@@ -455,7 +455,7 @@ void ScarletLayerTree::render()
         // render target; never wait for a lease just to discover a no-op.
         Damage delta { scene.size };
         scene.animations = scene.root->collectDamage(scene.size, delta);
-        if (!delta.isEmpty()) {
+        if (!delta.isEmpty() || !scene.hasPublished) {
             for (auto& slot : scene.slots)
                 if (slot.damage) slot.damage->add(delta);
             m_compositionRequired = true;
