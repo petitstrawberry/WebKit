@@ -26,6 +26,11 @@
 #include "HTMLCollection.h"
 #include "HTMLVideoElement.h"
 #include "MediaPlayer.h"
+#include "MediaError.h"
+#include "NodeDocument.h"
+#include "TimeRanges.h"
+#include "HTMLNames.h"
+#include <wtf/JSONValues.h>
 #endif
 #include "EmptyClients.h"
 #include "EventHandler.h"
@@ -163,6 +168,22 @@ struct ScarletWebView {
     std::string error;
     std::string inspectedText;
     SWVPaintStatistics paintStatistics { };
+#if ENABLE(VIDEO)
+    // Diagnostic snapshots, accessed only by the same owner as media_statistics.
+    struct MediaProfile {
+        bool enabled { [] {
+            const char* value = std::getenv("SCARLET_WEBVIEW_PROFILE");
+            return value && !std::strcmp(value, "1");
+        }() };
+        bool reported { false };
+        uint32_t index { 0 };
+        MonotonicTime lastReport;
+        String currentSrc;
+        String src;
+        unsigned errorCode { 0 };
+        String errorMessage;
+    } mediaProfile;
+#endif
     std::vector<uint8_t> publishedPixels;
 };
 
@@ -1358,6 +1379,65 @@ extern "C" int32_t scarlet_webview_complete_request(ScarletWebView* view, const 
     return result;
 }
 
+#if ENABLE(VIDEO)
+static void reportMediaProfile(ScarletWebView& view, HTMLVideoElement& video, uint32_t index)
+{
+    auto& profile = view.mediaProfile;
+    if (!profile.enabled)
+        return;
+    auto now = MonotonicTime::now();
+    auto currentSrc = video.currentSrc().string();
+    auto src = video.getURLAttribute(HTMLNames::srcAttr).string();
+    RefPtr error = video.error();
+    unsigned errorCode = error ? static_cast<unsigned>(error->code()) : 0;
+    String errorMessage = error ? error->message() : String { };
+    bool changed = !profile.reported || profile.index != index || profile.currentSrc != currentSrc
+        || profile.src != src || profile.errorCode != errorCode || profile.errorMessage != errorMessage;
+    if (!changed && (now - profile.lastReport).seconds() < 5.0)
+        return;
+    profile.reported = true;
+    profile.index = index;
+    profile.lastReport = now;
+    profile.currentSrc = currentSrc;
+    profile.src = src;
+    profile.errorCode = errorCode;
+    profile.errorMessage = errorMessage;
+
+    auto state = JSON::Object::create();
+    state->setDouble("index"_s, index);
+    state->setString("pageUrl"_s, video.document().url().string());
+    state->setString("currentSrc"_s, currentSrc);
+    state->setString("src"_s, src);
+    if (error) {
+        auto details = JSON::Object::create();
+        details->setInteger("code"_s, static_cast<int>(errorCode));
+        details->setString("message"_s, errorMessage);
+        state->setObject("error"_s, WTF::move(details));
+    } else
+        state->setValue("error"_s, JSON::Value::null());
+    auto buffered = JSON::Array::create();
+    auto ranges = video.buffered();
+    for (unsigned i = 0; i < ranges->length(); ++i) {
+        auto range = JSON::Array::create();
+        range->pushDouble(ranges->ranges().start(i).toDouble());
+        range->pushDouble(ranges->ranges().end(i).toDouble());
+        buffered->pushArray(WTF::move(range));
+    }
+    state->setArray("buffered"_s, WTF::move(buffered));
+    state->setBoolean("paused"_s, video.paused());
+    state->setBoolean("ended"_s, video.ended());
+    state->setBoolean("seeking"_s, video.seeking());
+    state->setInteger("networkState"_s, static_cast<int>(video.networkState()));
+    state->setInteger("readyState"_s, static_cast<int>(video.readyState()));
+    state->setDouble("playbackRate"_s, video.playbackRate());
+    state->setDouble("currentTime"_s, video.currentTime());
+    state->setDouble("duration"_s, video.duration());
+    auto json = state->toJSONString().utf8();
+    std::fprintf(stderr, "SCARLET_WEBVIEW_PROFILE stage=video-state view=%p data=%s\n",
+        static_cast<void*>(&view), reinterpret_cast<const char*>(json.data()));
+}
+#endif
+
 extern "C" int32_t scarlet_webview_media_statistics(ScarletWebView* view, uint32_t index, ScarletWebViewMediaStatistics* out)
 {
     auto status = viewStatus(view);
@@ -1384,6 +1464,7 @@ extern "C" int32_t scarlet_webview_media_statistics(ScarletWebView* view, uint32
         return SWV_EMPTY;
     if (!video)
         return SWV_INVALID_ARGUMENT;
+    reportMediaProfile(*view, *video, index);
     out->width = video->videoWidth();
     out->height = video->videoHeight();
     out->paused = video->paused();
