@@ -250,6 +250,10 @@ void CoordinatedBackingStoreProxy::createOrDestroyTiles(const IntRect& unscaledV
     if (!geometryChanged && !m_pendingTileCreation)
         return;
 
+    // Recompute pending work for the current geometry. Empty contents or cover
+    // below have no tiles left to create, even if the previous cover did.
+    m_pendingTileCreation = false;
+
     if (geometryChanged) {
         m_contentsRect = contentsRect;
         m_visibleRect = visibleRect;
