@@ -215,6 +215,11 @@ int initialize(DeviceState& owner)
     owner.allocator = sk_make_sp<Allocator>(dispatch, physical);
     backend.fMemoryAllocator = owner.allocator;
     GrContextOptions options;
+    // SGFX has 256 shader slots; a graphics pipeline can need two distinct
+    // shaders. Leave headroom beyond the cache for construction and command
+    // buffers retaining evicted pipelines. This bounds cache retention, not
+    // the total live pipelines of an arbitrarily complex recording.
+    options.fRuntimeProgramCacheSize = 64;
     bool stencil = false;
     for (auto format : { VK_FORMAT_S8_UINT, VK_FORMAT_D24_UNORM_S8_UINT, VK_FORMAT_D32_SFLOAT_S8_UINT }) {
         VkFormatProperties properties { };
