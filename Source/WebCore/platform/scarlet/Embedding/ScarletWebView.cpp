@@ -1551,12 +1551,13 @@ extern "C" int32_t scarlet_webview_mouse(ScarletWebView* view, const SWVMouseEve
         static_cast<int>(input->click_count), modifiers(input->modifiers), MonotonicTime::now(), 0, SyntheticClickType::NoTap, MouseEventInputSource::UserDriven,
         mousePointerID, delta };
     event.setButtons(view->pressedButtons);
-    // Hover/selection/DOM changes invalidate through ChromeClient. Merely
-    // moving the pointer must not repaint the entire pixel surface.
-    view->loadState.needsRenderingUpdate = true;
+    // Hover/selection/DOM changes invalidate through ChromeClient. Pointer
+    // input must use Page's coalescing scheduler rather than force animation
+    // callbacks and the complete rendering lifecycle on every mouse sample.
     auto& handler = view->frame->eventHandler();
     auto result = input->kind == SWV_MOUSE_MOVE ? handler.mouseMoved(event)
         : input->kind == SWV_MOUSE_DOWN ? handler.handleMousePressEvent(event) : handler.handleMouseReleaseEvent(event);
+    view->page->scheduleRenderingUpdate({ RenderingUpdateStep::LayerFlush });
     *handled = result.wasHandled();
     return result.remoteUserInputEventData() ? SWV_UNSUPPORTED : SWV_OK;
 }
