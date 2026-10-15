@@ -136,6 +136,7 @@ struct ScarletWebView {
             uint64_t attempts { 0 }, failedSubmits { 0 }, full { 0 };
             uint64_t layout { 0 }, explicitFull { 0 }, dirtyFallback { 0 }, slotFull { 0 };
             uint64_t pixels { 0 }, paintLayoutMicros { 0 }, recordMicros { 0 }, submitMicros { 0 }, maxPaintMicros { 0 };
+            uint64_t recordFlushMicros { 0 }, recordTreeMicros { 0 }, recordSceneMicros { 0 };
             uint64_t ticks { 0 }, tickMicros { 0 }, maxTickMicros { 0 };
             uint64_t runLoopMicros { 0 }, renderingUpdateMicros { 0 }, renderingFinalizeMicros { 0 }, sceneFlushMicros { 0 };
             uint64_t requests { 0 }, requestMicros { 0 }, maxRequestMicros { 0 };
@@ -402,11 +403,12 @@ void reportProfile(ScarletWebView& view, MonotonicTime end)
     auto mediaTimeBytes = mediaTime.utf8();
     const auto& c = profile.counters;
     auto printable = [](uint64_t value) { return static_cast<unsigned long long>(value); };
-    std::fprintf(stderr, "SCARLET_WEBVIEW_PROFILE view=%p size=%ux%u period_us=%llu attempts=%llu failed_submits=%llu full=%llu layout=%llu explicit_full=%llu dirty_fallback=%llu slot_full=%llu painted_pixels=%llu paint_layout_us=%llu record_us=%llu submit_us=%llu max_paint_us=%llu ticks=%llu tick_us=%llu max_tick_us=%llu runloop_us=%llu rendering_update_us=%llu rendering_finalize_us=%llu scene_flush_us=%llu complete_requests=%llu complete_request_us=%llu max_complete_request_us=%llu gpu_completions=%llu gpu_completion_us=%llu max_gpu_completion_us=%llu video_index=0 video_count=%u video_width=%u video_height=%u video_decoded=%llu video_dropped=%llu video_presented=%llu video_time=%s\n",
+    std::fprintf(stderr, "SCARLET_WEBVIEW_PROFILE view=%p size=%ux%u period_us=%llu attempts=%llu failed_submits=%llu full=%llu layout=%llu explicit_full=%llu dirty_fallback=%llu slot_full=%llu painted_pixels=%llu paint_layout_us=%llu record_us=%llu record_flush_us=%llu record_tree_us=%llu record_scene_us=%llu submit_us=%llu max_paint_us=%llu ticks=%llu tick_us=%llu max_tick_us=%llu runloop_us=%llu rendering_update_us=%llu rendering_finalize_us=%llu scene_flush_us=%llu complete_requests=%llu complete_request_us=%llu max_complete_request_us=%llu gpu_completions=%llu gpu_completion_us=%llu max_gpu_completion_us=%llu video_index=0 video_count=%u video_width=%u video_height=%u video_decoded=%llu video_dropped=%llu video_presented=%llu video_time=%s\n",
         static_cast<void*>(&view), view.width, view.height, printable(profileMicroseconds(profile.periodStart, end)),
         printable(c.attempts), printable(c.failedSubmits), printable(c.full), printable(c.layout), printable(c.explicitFull),
         printable(c.dirtyFallback), printable(c.slotFull), printable(c.pixels), printable(c.paintLayoutMicros),
-        printable(c.recordMicros), printable(c.submitMicros), printable(c.maxPaintMicros), printable(c.ticks),
+        printable(c.recordMicros), printable(c.recordFlushMicros), printable(c.recordTreeMicros), printable(c.recordSceneMicros),
+        printable(c.submitMicros), printable(c.maxPaintMicros), printable(c.ticks),
         printable(c.tickMicros), printable(c.maxTickMicros), printable(c.runLoopMicros), printable(c.renderingUpdateMicros),
         printable(c.renderingFinalizeMicros), printable(c.sceneFlushMicros), printable(c.requests), printable(c.requestMicros), printable(c.maxRequestMicros),
         printable(c.gpuCompletions), printable(c.gpuCompletionMicros), printable(c.maxGpuCompletionMicros),
@@ -584,7 +586,11 @@ int32_t paintCoordinated(ScarletWebView& view)
     auto profileRecordStart = view.paintProfile.enabled ? MonotonicTime::now() : MonotonicTime { };
     // Paint may follow input or a resource callback before the next host tick.
     // Flush any layout/property changes through WebCore before committing them.
-    if (!frameView->flushCompositingStateIncludingSubframes() || !view.layerTree->flush(*frameView)) {
+    bool compositingFlushed = frameView->flushCompositingStateIncludingSubframes();
+    auto profileFlushEnd = view.paintProfile.enabled ? MonotonicTime::now() : MonotonicTime { };
+    bool treeFlushed = compositingFlushed && view.layerTree->flush(*frameView);
+    auto profileTreeEnd = view.paintProfile.enabled ? MonotonicTime::now() : MonotonicTime { };
+    if (!treeFlushed) {
         view.loadState.needsPaint = true;
         view.loadState.needsRenderingUpdate = true;
         return SWV_EMPTY;
@@ -634,10 +640,17 @@ int32_t paintCoordinated(ScarletWebView& view)
     auto submission = device ? device->submitAsync(*view.surface) : nullptr;
     bool submitted = submission && device->submissionStatus(*submission) != ScarletSkiaVulkan::SubmissionStatus::Failed;
     auto submitReturnedAt = view.paintProfile.enabled ? MonotonicTime::now() : MonotonicTime { };
-    if (view.paintProfile.enabled)
+    if (view.paintProfile.enabled) {
+        // Partition record_us for the same paint attempts. The scene interval
+        // includes display-update preparation immediately before scene.paint.
+        auto& counters = view.paintProfile.counters;
+        addProfileCounter(counters.recordFlushMicros, profileMicroseconds(profileRecordStart, profileFlushEnd));
+        addProfileCounter(counters.recordTreeMicros, profileMicroseconds(profileFlushEnd, profileTreeEnd));
+        addProfileCounter(counters.recordSceneMicros, profileMicroseconds(profileTreeEnd, profileRecordEnd));
         recordPaintProfile(view, IntRect { IntPoint { }, cssSize(view) }, neededLayout, explicitFullPaint,
             false, !priorTargetDamage, submitted, profileStart, profileLayoutEnd, profileRecordStart, profileRecordEnd,
             submitReturnedAt, paintedPixels);
+    }
     view.page->didCompleteRenderingUpdateDisplay();
     if (!submitted) {
         // A failed target is no longer trusted. The other slot still owns the
