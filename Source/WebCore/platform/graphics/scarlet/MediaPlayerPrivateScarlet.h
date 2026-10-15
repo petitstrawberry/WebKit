@@ -106,6 +106,7 @@ private:
     void stopFramePump();
     std::unique_ptr<VideoFramePump> m_framePump;
     uint64_t m_snapshotVideoFrameSerial { 0 };
+    uint64_t m_pumpPresentedCount { 0 };
     bool pushFrameToCompositor();
     void clearCompositorFrame();
 #endif

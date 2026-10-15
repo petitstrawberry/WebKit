@@ -667,24 +667,26 @@ static sk_sp<SkImage> uploadVideoFrame(const ScarletMediaFrame& frame)
 }
 #if USE(COORDINATED_GRAPHICS)
 struct MediaPlayerPrivateScarlet::VideoFramePump {
-    struct Snapshot { uint64_t serial { 0 }; double mediaTime { 0 }; FloatSize size; bool failed { false }; };
+    struct Snapshot {
+        uint64_t serial { 0 }; double mediaTime { 0 }; FloatSize size; bool failed { false };
+        uint64_t presentedCount { 0 }, presentedSerial { 0 };
+        double presentedMediaTime { 0 };
+        FloatSize presentedSize;
+        MonotonicTime presentedAt;
+    };
+    struct Feedback { std::mutex mutex; Snapshot latest; };
     Ref<RunLoop> runLoop;
     RunLoop::Timer timer;
     ScarletMediaSession* session;
     Ref<CoordinatedPlatformLayerBufferProxy> proxy;
-    ThreadSafeWeakPtr<MediaPlayerPrivateScarlet> player;
-    Ref<RunLoop> owner;
-    uint64_t generation, proxyGeneration, serial;
-    std::mutex mutex;
-    Snapshot latest;
+    uint64_t serial;
+    std::shared_ptr<Feedback> feedback { std::make_shared<Feedback>() };
     sk_sp<SkImage> image; // Compositor only.
     VideoFramePump(RunLoop& loop, ScarletMediaSession* s, CoordinatedPlatformLayerBufferProxy& p,
         MediaPlayerPrivateScarlet& media)
         : runLoop(loop)
         , timer(loop, "ScarletVideoFramePump"_s, [this] { poll(); })
-        , session(s), proxy(p), player(media), owner(RunLoop::currentSingleton())
-        , generation(media.m_videoPresentationGeneration)
-        , proxyGeneration(media.m_compositorProxyGeneration), serial(media.m_videoFrameSerial)
+        , session(s), proxy(p), serial(media.m_videoFrameSerial)
     { }
     void poll()
     {
@@ -694,25 +696,29 @@ struct MediaPlayerPrivateScarlet::VideoFramePump {
         if (scarlet_media_session_acquire_frame(session, &frame) <= 0) return;
         auto release = makeScopeExit([&] { scarlet_media_session_release_frame(session, frame.lease); });
         image = uploadVideoFrame(frame);
-        if (!image) { std::lock_guard lock(mutex); latest.failed = true; return; }
+        if (!image) { std::lock_guard lock(feedback->mutex); feedback->latest.failed = true; return; }
         auto size = FloatSize { static_cast<float>(frame.width), static_cast<float>(frame.height) };
         double mediaTime = frame.presentation_us / 1000000.0;
         ++serial;
         auto buffer = makeUnique<CoordinatedPlatformLayerBufferSkiaImage>(sk_sp { image },
             CoordinatedPlatformLayerBuffer::AlphaMode::Opaque, CoordinatedPlatformLayerBuffer::Rotation::None);
-        buffer->setPresentationCallback([weak = player, owner = owner.copyRef(), generation = generation,
-            proxyGeneration = proxyGeneration, serial = serial, mediaTime, size](MonotonicTime time) mutable {
-            owner->dispatch([weak, generation, proxyGeneration, serial, mediaTime, size, time] {
-                if (auto media = weak.get(); media && media->m_videoPresentationGeneration == generation
-                    && media->m_compositorProxyGeneration == proxyGeneration)
-                    media->didPresentVideoFrame(serial, mediaTime, size, time);
-            });
+        buffer->setPresentationCallback([feedback = feedback, serial = serial, mediaTime, size](MonotonicTime time) {
+            // A bounded latest-value mailbox replaces per-frame owner dispatch.
+            // No DOM/media object is retained or accessed by the compositor.
+            std::lock_guard lock(feedback->mutex);
+            ++feedback->latest.presentedCount;
+            feedback->latest.presentedSerial = serial;
+            feedback->latest.presentedMediaTime = mediaTime;
+            feedback->latest.presentedSize = size;
+            feedback->latest.presentedAt = time;
         });
         proxy->setDisplayBuffer(WTF::move(buffer));
-        std::lock_guard lock(mutex);
-        latest = { serial, mediaTime, size, false };
+        std::lock_guard lock(feedback->mutex);
+        feedback->latest.serial = serial;
+        feedback->latest.mediaTime = mediaTime;
+        feedback->latest.size = size;
     }
-    Snapshot snapshot() { std::lock_guard lock(mutex); return latest; }
+    Snapshot snapshot() { std::lock_guard lock(feedback->mutex); return feedback->latest; }
     sk_sp<SkImage> snapshotForOwner(const sk_sp<GrContextThreadSafeProxy>& ownerProxy)
     {
         // Explicit canvas/video capture only. Normal video never makes this
@@ -770,6 +776,11 @@ void MediaPlayerPrivateScarlet::updateFrame()
     if (m_framePump) {
         auto state = m_framePump->snapshot();
         if (state.failed) { fail(MediaPlayer::NetworkState::DecodeError); return; }
+        if (state.presentedCount > m_pumpPresentedCount && state.presentedSerial > m_paintedVideoFrameSerial) {
+            m_presentedVideoFrames += state.presentedCount - m_pumpPresentedCount - 1;
+            didPresentVideoFrame(state.presentedSerial, state.presentedMediaTime, state.presentedSize, state.presentedAt);
+        }
+        m_pumpPresentedCount = state.presentedCount;
         if (state.serial > m_videoFrameSerial) {
             m_videoFrameSerial = state.serial;
             m_frameMediaTime = state.mediaTime;
@@ -948,6 +959,7 @@ bool MediaPlayerPrivateScarlet::pushFrameToCompositor()
     if (m_framePump) return true;
     auto loop = m_contentsBufferProxy->scarletCompositingRunLoop();
     if (!loop) return false;
+    m_pumpPresentedCount = 0;
     m_framePump = std::make_unique<VideoFramePump>(*loop, m_session, *m_contentsBufferProxy, *this);
     // Publish the initial owner image as a promise for the compositor context.
     if (m_image) {
