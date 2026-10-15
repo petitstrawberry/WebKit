@@ -3,7 +3,7 @@
 // The restricted $vm helpers are enabled only in this test process.
 #include "config.h"
 #include "APICast.h"
-#include "Exception.h"
+#include <JavaScriptCore/Exception.h>
 #include "InitializeThreading.h"
 #include "JSCConfig.h"
 #include "JSGlobalObject.h"
