@@ -629,12 +629,6 @@ static unsigned numberOfSuperAndPerformanceCores()
 
 static void overrideDefaults()
 {
-#if OS(SCARLET)
-    // Start with baseline compilation and finalization on the executing JS
-    // thread. DFG, FTL, Wasm, and Yarr remain disabled by this port's build.
-    Options::useConcurrentJIT() = false;
-#endif
-
 #if OS(DARWIN)
     if (Options::machExceptionHandlerSandboxPolicy == Options::SandboxPolicy::Block)
         disableAllSignalHandlerBasedOptions();
