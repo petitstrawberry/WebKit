@@ -532,6 +532,8 @@ int32_t paintCoordinated(ScarletWebView& view)
     RefPtr frameView = view.frame->view();
     RefPtr document = view.frame->document();
     if (!frameView || !document) return SWV_EMPTY;
+    if (!view.loadState.needsPaint && !frameView->needsLayout() && !view.layerTree->needsComposition())
+        return SWV_EMPTY;
     document->updateLayoutIgnorePendingStylesheets();
     if (!frameView->renderView() || frameView->needsLayout() || !frameView->layoutContext().inPaintableState())
         return SWV_EMPTY;
@@ -1173,7 +1175,7 @@ extern "C" int32_t scarlet_webview_needs_paint(ScarletWebView* view, uint32_t* o
     RefPtr frameView = view->frame->view();
     *out = view->loadState.needsPaint || !view->generation || (frameView && frameView->needsLayout())
 #if USE(COORDINATED_GRAPHICS)
-        || view->layerTree->output()->state() || view->layerTree->needsComposition()
+        || view->layerTree->needsComposition()
 #endif
         ;
     return SWV_OK;
