@@ -154,7 +154,7 @@ struct ResponseData {
     std::string statusText;
     std::string errorMessage;
     std::vector<HeaderData> headers;
-    std::vector<uint8_t> body;
+    Vector<uint8_t> body;
 };
 
 bool copyResponse(const SWVResponse& input, ResponseData& output)
@@ -183,7 +183,7 @@ bool copyResponse(const SWVResponse& input, ResponseData& output)
             return false;
     }
     if (input.body.length)
-        output.body.assign(input.body.data, input.body.data + input.body.length);
+        output.body.append(std::span<const uint8_t> { input.body.data, input.body.length });
     return true;
 }
 
@@ -735,9 +735,13 @@ private:
         // strategy ownership record or start another navigation.
         auto response = std::move(*load->response);
         load->response.reset();
-        if (!response.body.empty()) {
-            auto buffer = SharedBuffer::create(std::span<const uint8_t> { response.body.data(), response.body.size() });
-            load->loader->didReceiveData(buffer.get(), static_cast<long long>(response.body.size()), DataPayloadBytes);
+        if (!response.body.isEmpty()) {
+            // The ABI bytes were already cloned when completion was accepted.
+            // Transfer that allocation into WebCore instead of copying the
+            // complete image/script/media response again on its owner thread.
+            auto length = response.body.size();
+            auto buffer = SharedBuffer::create(WTF::move(response.body));
+            load->loader->didReceiveData(buffer.get(), static_cast<long long>(length), DataPayloadBytes);
         }
         if (!isActive(load))
             return;
