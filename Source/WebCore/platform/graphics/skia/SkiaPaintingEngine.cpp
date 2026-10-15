@@ -119,7 +119,14 @@ void SkiaPaintingEngine::paintIntoGraphicsContext(const GraphicsLayer& layer, Gr
 
     context.translate(-dirtyRect.x(), -dirtyRect.y());
     context.scale(contentsScale);
+#if PLATFORM(SCARLET)
+    // Let WebCore decode a first visible image off the owner, as tiled
+    // CoreAnimation painting does. Its existing painted-image/flicker and
+    // explicit synchronous-decoding checks still select the final mode.
+    layer.paintGraphicsLayerContents(context, clipRect, { GraphicsLayerPaintBehavior::DefaultAsynchronousImageDecode });
+#else
     layer.paintGraphicsLayerContents(context, clipRect);
+#endif
 }
 
 Ref<CoordinatedTileBuffer> SkiaPaintingEngine::createBuffer(RenderingMode renderingMode, const IntSize& size, bool contentsOpaque) const
