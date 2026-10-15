@@ -134,6 +134,7 @@ struct ScarletWebView {
             uint64_t layout { 0 }, explicitFull { 0 }, dirtyFallback { 0 }, slotFull { 0 };
             uint64_t pixels { 0 }, paintLayoutMicros { 0 }, recordMicros { 0 }, submitMicros { 0 }, maxPaintMicros { 0 };
             uint64_t ticks { 0 }, tickMicros { 0 }, maxTickMicros { 0 };
+            uint64_t runLoopMicros { 0 }, renderingUpdateMicros { 0 }, renderingFinalizeMicros { 0 }, sceneFlushMicros { 0 };
             uint64_t requests { 0 }, requestMicros { 0 }, maxRequestMicros { 0 };
         } counters;
     } paintProfile;
@@ -335,12 +336,13 @@ void reportProfile(ScarletWebView& view, MonotonicTime end)
         return;
     const auto& c = profile.counters;
     auto printable = [](uint64_t value) { return static_cast<unsigned long long>(value); };
-    std::fprintf(stderr, "SCARLET_WEBVIEW_PROFILE view=%p size=%ux%u period_us=%llu attempts=%llu failed_submits=%llu full=%llu layout=%llu explicit_full=%llu dirty_fallback=%llu slot_full=%llu painted_pixels=%llu paint_layout_us=%llu record_us=%llu submit_us=%llu max_paint_us=%llu ticks=%llu tick_us=%llu max_tick_us=%llu complete_requests=%llu complete_request_us=%llu max_complete_request_us=%llu\n",
+    std::fprintf(stderr, "SCARLET_WEBVIEW_PROFILE view=%p size=%ux%u period_us=%llu attempts=%llu failed_submits=%llu full=%llu layout=%llu explicit_full=%llu dirty_fallback=%llu slot_full=%llu painted_pixels=%llu paint_layout_us=%llu record_us=%llu submit_us=%llu max_paint_us=%llu ticks=%llu tick_us=%llu max_tick_us=%llu runloop_us=%llu rendering_update_us=%llu rendering_finalize_us=%llu scene_flush_us=%llu complete_requests=%llu complete_request_us=%llu max_complete_request_us=%llu\n",
         static_cast<void*>(&view), view.width, view.height, printable(profileMicroseconds(profile.periodStart, end)),
         printable(c.attempts), printable(c.failedSubmits), printable(c.full), printable(c.layout), printable(c.explicitFull),
         printable(c.dirtyFallback), printable(c.slotFull), printable(c.pixels), printable(c.paintLayoutMicros),
         printable(c.recordMicros), printable(c.submitMicros), printable(c.maxPaintMicros), printable(c.ticks),
-        printable(c.tickMicros), printable(c.maxTickMicros), printable(c.requests), printable(c.requestMicros), printable(c.maxRequestMicros));
+        printable(c.tickMicros), printable(c.maxTickMicros), printable(c.runLoopMicros), printable(c.renderingUpdateMicros),
+        printable(c.renderingFinalizeMicros), printable(c.sceneFlushMicros), printable(c.requests), printable(c.requestMicros), printable(c.maxRequestMicros));
     profile.counters = { };
     profile.periodStart = end;
 }
@@ -371,6 +373,26 @@ public:
 private:
     ScarletWebView& m_view;
     Kind m_kind;
+    MonotonicTime m_start;
+};
+
+// Non-overlapping tick wall phases. The RunLoop phase includes script execution
+// and synchronous host/resource callbacks; it is not a pure JavaScript timer.
+class ProfileTickPhase {
+public:
+    ProfileTickPhase(ScarletWebView& view, uint64_t& counter)
+        : m_counter(counter)
+        , m_enabled(view.paintProfile.enabled)
+        , m_start(m_enabled ? MonotonicTime::now() : MonotonicTime { })
+    { }
+    ~ProfileTickPhase()
+    {
+        if (m_enabled)
+            addProfileCounter(m_counter, profileMicroseconds(m_start, MonotonicTime::now()));
+    }
+private:
+    uint64_t& m_counter;
+    bool m_enabled;
     MonotonicTime m_start;
 };
 
@@ -1043,7 +1065,12 @@ extern "C" int32_t scarlet_webview_tick(ScarletWebView* view)
     ProfileOperation profile(*view, ProfileOperation::Kind::Tick);
 #endif
     screenForView(*view);
-    WTF::RunLoop::cycle();
+    {
+#if USE(SKIA)
+        ProfileTickPhase phase(*view, view->paintProfile.counters.runLoopMicros);
+#endif
+        WTF::RunLoop::cycle();
+    }
     // This runs real animation frame callbacks, timelines, resize/scroll
     // events, observers and rendering steps; the host never executes JS.
     RefPtr frameView = view->frame->view();
@@ -1055,14 +1082,29 @@ extern "C" int32_t scarlet_webview_tick(ScarletWebView* view)
         // Clear before running callbacks: animation frames and observers may
         // request the next update while this one is being completed.
         view->loadState.needsRenderingUpdate = false;
-        view->page->updateRendering();
-        view->page->finalizeRenderingUpdate({ });
+        {
+#if USE(SKIA)
+            ProfileTickPhase phase(*view, view->paintProfile.counters.renderingUpdateMicros);
+#endif
+            view->page->updateRendering();
+        }
+        {
+#if USE(SKIA)
+            ProfileTickPhase phase(*view, view->paintProfile.counters.renderingFinalizeMicros);
+#endif
+            view->page->finalizeRenderingUpdate({ });
+        }
 #if USE(COORDINATED_GRAPHICS)
         // Page finalization already flushes the frame's GraphicsLayers. Commit
         // their retained scene only after layout and all rendering steps finish.
         frameView = view->frame->view();
-        if (frameView && !view->layerTree->flush(*frameView))
-            view->loadState.needsRenderingUpdate = true;
+        if (frameView) {
+#if USE(SKIA)
+            ProfileTickPhase phase(*view, view->paintProfile.counters.sceneFlushMicros);
+#endif
+            if (!view->layerTree->flush(*frameView))
+                view->loadState.needsRenderingUpdate = true;
+        }
         view->page->didUpdateRendering();
 #endif
     }
