@@ -3,6 +3,7 @@
 // The restricted $vm helpers are enabled only in this test process.
 #include "config.h"
 #include "APICast.h"
+#include "Exception.h"
 #include "InitializeThreading.h"
 #include "JSCConfig.h"
 #include "JSGlobalObject.h"
@@ -96,6 +97,18 @@ static bool semantics(JSGlobalContextRef context)
         let caught = false;
         try { hot(Symbol()); } catch(e) { caught = e instanceof TypeError; }
         if(!caught) throw Error('optimized exception');
+        globalThis.regexTierSeen = false;
+        function regexHot(value) {
+            if(expectedDFG ? $vm.dfgTrue() : $vm.baselineJITTrue()) regexTierSeen=true;
+            return /(?:ab)+cd/.test(value);
+        }
+        $vm.noInline(regexHot);
+        if(/a(b+)c/.exec('xxabbc')[1]!=='bb') throw Error('regexp captures');
+        if(!/^\u{1f353}+$/u.test('🍓🍓')) throw Error('regexp unicode');
+        if(!/(?<=a)b/u.test('ab')) throw Error('regexp lookbehind fallback');
+        const sticky = /a+/gy;
+        sticky.lastIndex = 1;
+        if(sticky.exec('baa')[0]!=='aa' || sticky.lastIndex!==3) throw Error('regexp lastIndex');
         globalThis.gcTierSeen = false;
         globalThis.gcAfterTierSeen = false;
         function acrossGC(n, collect) {
@@ -111,6 +124,20 @@ static bool semantics(JSGlobalContextRef context)
         true;
     )JS", "osr-watchpoint-exception"))
         return false;
+    deadline = Clock::now() + std::chrono::seconds(20);
+    seen = false;
+    do {
+        if (!require(context,
+                "for(let n=0;n<1024;++n) if(!regexHot('ababcd') || regexHot('abx')) throw Error('regexp result'); true;",
+                "regexp-warm")
+            || !evaluate(context, "regexTierSeen", seen))
+            return false;
+        sched_yield();
+    } while (!seen && Clock::now() < deadline);
+    if (!seen) {
+        std::fprintf(stderr, "SCARLET_DFG_FAIL stage=regexp-actual-tier\n");
+        return false;
+    }
     deadline = Clock::now() + std::chrono::seconds(20);
     seen = false;
     do {
@@ -170,9 +197,10 @@ static bool interruptLoop(JSGlobalContextRef context)
     JSObjectSetProperty(context, JSContextGetGlobalObject(context), name, callback, kJSPropertyAttributeReadOnly, nullptr);
     JSStringRelease(name);
     auto& vm = toJS(context)->vm();
+    JSValueRef termination = nullptr;
     {
         JSC::JSLockHolder locker(vm);
-        vm.ensureTerminationException();
+        termination = toRef(toJS(context), vm.ensureTerminationException()->value());
     }
     observedTier.store(false, std::memory_order_release);
     Interrupt interrupt { &vm };
@@ -198,7 +226,7 @@ static bool interruptLoop(JSGlobalContextRef context)
     bool passed = observedTier.load(std::memory_order_acquire)
         && interrupt.requested.load(std::memory_order_acquire)
         && !interrupt.timedOut.load(std::memory_order_acquire) && !result
-        && vm.hasTerminationRequest();
+        && exception && JSValueIsStrictEqual(context, exception, termination);
     std::printf("SCARLET_DFG_%s stage=infinite-interrupt tier=%s observed=%u timeout=%u exception=%u\n",
         passed ? "PASS" : "FAIL", expectDFG ? "DFG" : "Baseline",
         observedTier.load(), interrupt.timedOut.load(), !!exception);
@@ -208,7 +236,7 @@ static bool interruptLoop(JSGlobalContextRef context)
 int main()
 {
     static_assert(ENABLE_DFG_JIT, "Build this regression against the normal DFG-enabled native JSC");
-    static_assert(!ENABLE_FTL_JIT && !ENABLE_WEBASSEMBLY && !ENABLE_YARR_JIT);
+    static_assert(!ENABLE_FTL_JIT && !ENABLE_WEBASSEMBLY && ENABLE_YARR_JIT);
     JSC::Config::enableRestrictedOptions();
     JSC::Options::initializeWithOptionsCustomization([] {
         JSC::Options::useDollarVM() = true;
