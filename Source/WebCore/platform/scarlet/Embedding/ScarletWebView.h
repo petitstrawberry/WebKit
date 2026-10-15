@@ -113,9 +113,6 @@ int32_t scarlet_webview_pixels(ScarletWebView*, SWVPixels*);
  * or immediately when discarding a never-presented frame. Tokens remain
  * valid across navigation and viewport changes. */
 typedef struct { int32_t handle; uint32_t width, height, format; uint64_t generation; } SWVGpuFrame;
-/* Pure owner-thread state: 0 none, 1 submitted/pending, 2 completed/ready.
- * Does not collect GPU completion, run callbacks, tick or paint. Unsupported
- * compositor profiles return SWV_UNSUPPORTED and write 0. */
 // Output handles own only a synchronized mailbox. These three operations are
 // callable from any thread, including after the Page has been destroyed.
 typedef struct SWVCompositorOutput SWVCompositorOutput;
@@ -126,6 +123,9 @@ int32_t scarlet_webview_output_release(SWVCompositorOutput*, uint64_t generation
 // Owner-only: tag subsequent scene commits for navigation filtering.
 int32_t scarlet_webview_set_output_epoch(ScarletWebView*, uint64_t epoch);
 int32_t scarlet_webview_commit(ScarletWebView*);
+/* Owner-thread observation: 0 idle, 1 queued/submitted/pending, 2 ready.
+ * The compositor advances GPU completion independently. This query does not
+ * run callbacks, tick, or paint. Unsupported profiles return SWV_UNSUPPORTED. */
 int32_t scarlet_webview_gpu_frame_state(ScarletWebView*, uint32_t*);
 int32_t scarlet_webview_gpu_frame_capacity(ScarletWebView*, uint32_t*);
 int32_t scarlet_webview_gpu_frame(ScarletWebView*, SWVGpuFrame*);

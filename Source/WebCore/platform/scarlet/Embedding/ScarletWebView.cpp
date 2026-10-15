@@ -1277,6 +1277,8 @@ extern "C" int32_t scarlet_webview_gpu_frame_state(ScarletWebView* view, uint32_
     if (!out) return SWV_INVALID_ARGUMENT;
 #if USE(COORDINATED_GRAPHICS)
     *out = view->layerTree->output()->state();
+    if (!*out && view->layerTree->hasPendingComposition())
+        *out = 1;
     return SWV_OK;
 #else
     return SWV_UNSUPPORTED;

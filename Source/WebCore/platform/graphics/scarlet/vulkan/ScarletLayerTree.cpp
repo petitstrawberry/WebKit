@@ -211,6 +211,11 @@ void ScarletLayerTree::setOutputEpoch(uint64_t epoch)
     assertIsOwner();
     std::lock_guard lock(m_commitMutex);
     m_epoch = epoch;
+    // A snapshot committed for the previous navigation keeps its old tag.
+    // Only a later Page flush may attach the new navigation's output epoch.
+    m_commitPending = false;
+    m_pendingLayers.clear();
+    m_pendingRoots.clear();
 }
 void ScarletLayerTree::discardOutput()
 {
@@ -248,6 +253,12 @@ Ref<CoordinatedImageBackingStore> ScarletLayerTree::imageBackingStore(Ref<Native
 bool ScarletLayerTree::needsComposition() const
 {
     return !m_detached && m_ownerCommitRequired;
+}
+bool ScarletLayerTree::hasPendingComposition() const
+{
+    if (m_compositionRequired || m_pendingTiles) return true;
+    std::lock_guard lock(m_commitMutex);
+    return m_commitPending;
 }
 void ScarletLayerTree::notifyCompositionRequired()
 {
@@ -331,6 +342,7 @@ void ScarletLayerTree::commit()
     {
         std::lock_guard lock(m_commitMutex);
         if (!m_commitPending) return;
+        { std::lock_guard outputLock(m_output->mutex); m_output->pending = true; }
         layers = WTF::move(m_pendingLayers);
         roots = WTF::move(m_pendingRoots);
         removed = WTF::move(m_removedLayers);

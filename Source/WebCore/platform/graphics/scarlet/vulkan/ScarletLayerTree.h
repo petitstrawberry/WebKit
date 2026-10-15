@@ -68,6 +68,7 @@ public:
     struct TilePaintStatistics { uint64_t paints { 0 }, pixels { 0 }; };
     TilePaintStatistics tilePaintStatistics() const;
     bool needsComposition() const;
+    bool hasPendingComposition() const;
     int readback(uint64_t, Vector<uint8_t>&, uint32_t&, uint32_t&);
     void detach();
 private:
