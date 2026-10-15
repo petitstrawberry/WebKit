@@ -252,7 +252,15 @@ Ref<CoordinatedImageBackingStore> ScarletLayerTree::imageBackingStore(Ref<Native
 }
 bool ScarletLayerTree::needsComposition() const
 {
-    return !m_detached && m_ownerCommitRequired;
+    if (m_detached) return false;
+    if (m_ownerCommitRequired) return true;
+    // Incremental visible-tile creation can need another owner flush. The
+    // compositor never reads the GraphicsLayer-owned layer collection.
+    if (isMainThread()) {
+        for (const auto& layer : m_layers)
+            if (layer->hasPendingTilesCreation()) return true;
+    }
+    return false;
 }
 bool ScarletLayerTree::hasPendingComposition() const
 {
