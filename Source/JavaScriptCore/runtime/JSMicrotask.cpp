@@ -158,6 +158,8 @@ static JSValue callMicrotask(JSGlobalObject* globalObject, JSValue functionObjec
         if ((sizeof...(args) + 1) >= newCodeBlock->numParameters()) [[likely]] {
             auto* entry = functionExecutable->generatedJITCodeAddressForCall();
             auto* callee = asObject(functionObject.asCell());
+            if constexpr (sizeof...(args) <= 6)
+                recordJavaScriptExecutionEntry();
             if constexpr (!sizeof...(args))
                 return JSValue::decode(vmEntryToJavaScriptWith0Arguments(entry, &vm, newCodeBlock, callee, thisValue, context));
             else if constexpr (sizeof...(args) == 1)
@@ -198,7 +200,7 @@ static JSValue callMicrotask(JSGlobalObject* globalObject, JSValue functionObjec
 
     if (isJSCall) {
         ASSERT(jitCode == functionExecutable->generatedJITCodeForCall().ptr());
-        return JSValue::decode(vmEntryToJavaScript(jitCode->addressForCall(), &vm, &protoCallFrame));
+        return JSValue::decode(vmEntryToJavaScriptWithEntryCount(jitCode->addressForCall(), &vm, &protoCallFrame));
     }
 
 #if ENABLE(WEBASSEMBLY)

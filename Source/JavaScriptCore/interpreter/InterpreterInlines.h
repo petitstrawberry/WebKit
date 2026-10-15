@@ -124,7 +124,7 @@ ALWAYS_INLINE JSValue Interpreter::executeCachedCall(CachedCall& cachedCall)
 
     // Execute the code:
     throwScope.release();
-    return JSValue::decode(vmEntryToJavaScript(entry, &vm, &cachedCall.m_protoCallFrame));
+    return JSValue::decode(vmEntryToJavaScriptWithEntryCount(entry, &vm, &cachedCall.m_protoCallFrame));
 }
 
 #if (CPU(ARM64) || CPU(X86_64)) && CPU(ADDRESS64) && !ENABLE(C_LOOP)
@@ -154,6 +154,7 @@ ALWAYS_INLINE JSValue Interpreter::tryCallWithArguments(CachedCall& cachedCall, 
     auto* codeBlock = cachedCall.m_protoCallFrame.codeBlock();
     auto* callee = cachedCall.m_protoCallFrame.callee();
 
+    recordJavaScriptExecutionEntry();
     if constexpr (!sizeof...(args))
         return JSValue::decode(vmEntryToJavaScriptWith0Arguments(entry, &vm, codeBlock, callee, thisValue, nullptr, args...));
     else if constexpr (sizeof...(args) == 1)

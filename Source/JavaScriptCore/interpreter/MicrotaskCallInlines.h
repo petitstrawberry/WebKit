@@ -70,6 +70,7 @@ ALWAYS_INLINE JSValue MicrotaskCall::tryCallWithArguments(VM& vm, JSFunction* fu
             entry = m_addressForCall;
         }
         auto* codeBlock = m_codeBlock;
+        recordJavaScriptExecutionEntry();
         if constexpr (!sizeof...(args))
             RELEASE_AND_RETURN(scope, JSValue::decode(vmEntryToJavaScriptWith0Arguments(entry, &vm, codeBlock, function, thisValue, context)));
         else if constexpr (sizeof...(args) == 1)

@@ -37,6 +37,9 @@ typedef int64_t EncodedJSValue;
 
 extern "C" {
     EncodedJSValue SYSV_ABI NOT_TAIL_CALLED vmEntryToJavaScript(void*, VM*, ProtoCallFrame*);
+#if OS(SCARLET)
+    void scarlet_jsc_record_execution_entry();
+#endif
     EncodedJSValue SYSV_ABI NOT_TAIL_CALLED vmEntryToNative(void*, VM*, ProtoCallFrame*);
     EncodedJSValue SYSV_ABI NOT_TAIL_CALLED vmEntryCustomGetter(JSGlobalObject*, EncodedJSValue, PropertyName, void*);
     void SYSV_ABI NOT_TAIL_CALLED vmEntryCustomSetter(JSGlobalObject*, EncodedJSValue, EncodedJSValue, PropertyName, void*);
@@ -51,6 +54,23 @@ extern "C" {
     EncodedJSValue SYSV_ABI NOT_TAIL_CALLED vmEntryToJavaScriptWith5Arguments(void*, VM*, CodeBlock*, JSObject*, JSValue, JSCell*, JSValue, JSValue, JSValue, JSValue, JSValue);
     EncodedJSValue SYSV_ABI NOT_TAIL_CALLED vmEntryToJavaScriptWith6Arguments(void*, VM*, CodeBlock*, JSObject*, JSValue, JSCell*, JSValue, JSValue, JSValue, JSValue, JSValue, JSValue);
 #endif
+}
+
+// Keep diagnostic counting outside assembly: the existing VM-entry prologue,
+// argument registers, callee saves and GC entry record remain unchanged.
+ALWAYS_INLINE void recordJavaScriptExecutionEntry()
+{
+#if OS(SCARLET) && !ENABLE(C_LOOP)
+    scarlet_jsc_record_execution_entry();
+#endif
+}
+
+ALWAYS_INLINE EncodedJSValue vmEntryToJavaScriptWithEntryCount(void* executableAddress, VM* vm, ProtoCallFrame* protoCallFrame)
+{
+#if OS(SCARLET) && !ENABLE(C_LOOP)
+    scarlet_jsc_record_execution_entry();
+#endif
+    return vmEntryToJavaScript(executableAddress, vm, protoCallFrame);
 }
 
 #if CPU(ARM64E) && !ENABLE(C_LOOP)

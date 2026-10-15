@@ -1231,7 +1231,7 @@ failedJSONP:
     // Execute the code:
     throwScope.release();
     ASSERT(jitCode == program->generatedJITCode().ptr());
-    return JSValue::decode(vmEntryToJavaScript(jitCode->addressForCall(), &vm, &protoCallFrame));
+    return JSValue::decode(vmEntryToJavaScriptWithEntryCount(jitCode->addressForCall(), &vm, &protoCallFrame));
 }
 
 JSValue Interpreter::executeBoundCall(VM& vm, JSBoundFunction* function, JSCell* context, const ArgList& args)
@@ -1322,7 +1322,7 @@ ALWAYS_INLINE JSValue Interpreter::executeCallImpl(VM& vm, JSObject* function, c
     scope.release();
     if (isJSCall) {
         ASSERT(jitCode == functionExecutable->generatedJITCodeForCall().ptr());
-        return JSValue::decode(vmEntryToJavaScript(jitCode->addressForCall(), &vm, &protoCallFrame));
+        return JSValue::decode(vmEntryToJavaScriptWithEntryCount(jitCode->addressForCall(), &vm, &protoCallFrame));
     }
 
 #if ENABLE(WEBASSEMBLY)
@@ -1417,7 +1417,7 @@ JSObject* Interpreter::executeConstruct(JSObject* constructor, const CallData& c
     // Execute the code.
     if (isJSConstruct) {
         ASSERT(jitCode == constructData.js.functionExecutable->generatedJITCodeForConstruct().ptr());
-        result = vmEntryToJavaScript(jitCode->addressForCall(), &vm, &protoCallFrame);
+        result = vmEntryToJavaScriptWithEntryCount(jitCode->addressForCall(), &vm, &protoCallFrame);
     } else
         result = vmEntryToNative(constructData.native.function.taggedPtr(), &vm, &protoCallFrame);
 
@@ -1632,6 +1632,7 @@ JSValue Interpreter::executeEval(EvalExecutable* eval, JSValue thisValue, JSScop
         }
     }
     callee->setScope(vm, scope);
+    recordJavaScriptExecutionEntry();
     EncodedJSValue result = vmEntryToJavaScriptWith0Arguments(entry, &vm, codeBlock, callee, thisValue, nullptr);
     callee->setScope(vm, nullptr);
 #else
@@ -1662,7 +1663,7 @@ JSValue Interpreter::executeEval(EvalExecutable* eval, JSValue thisValue, JSScop
     // eval code only uses scope at the beginning (op_enter).
     // We can replace the current scope for the subsequent run.
     callee->setScope(vm, scope);
-    EncodedJSValue result = vmEntryToJavaScript(jitCode->addressForCall(), &vm, &protoCallFrame);
+    EncodedJSValue result = vmEntryToJavaScriptWithEntryCount(jitCode->addressForCall(), &vm, &protoCallFrame);
     callee->setScope(vm, nullptr);
 #endif
     ensureStillAliveHere(eval);
@@ -1736,7 +1737,7 @@ JSValue Interpreter::executeModuleProgram(JSModuleRecord* record, ModuleProgramE
     // Execute the code:
     throwScope.release();
     ASSERT(jitCode == executable->generatedJITCode().ptr());
-    return JSValue::decode(vmEntryToJavaScript(jitCode->addressForCall(), &vm, &protoCallFrame));
+    return JSValue::decode(vmEntryToJavaScriptWithEntryCount(jitCode->addressForCall(), &vm, &protoCallFrame));
 }
 
 NEVER_INLINE void Interpreter::debug(CallFrame* callFrame, DebugHookType debugHookType, JSValue data)

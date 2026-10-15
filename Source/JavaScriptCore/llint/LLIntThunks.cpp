@@ -910,26 +910,30 @@ DEFINE_IPINT_THUNK_FOR_CATCH(inPlaceInterpreterTableCatchAllrefEntryThunk, ipint
 
 } // namespace LLInt
 
-#if ENABLE(C_LOOP)
-// Non-JIT (i.e. C Loop LLINT) case:
-
 #if OS(SCARLET)
-// Actual native JavaScript bytecode entries, separate from WebCore's
-// conservative scriptExecutionCount permission/reentrancy checks. All C-loop
-// program/call/construct/eval/module/cached-call/microtask entries use this gate;
-// native callbacks do not. Keep other ports and all execution semantics intact.
+// Count actual JavaScript VM entries, not native callbacks or WebCore script
+// permission checks. C-loop entries count inside their gate; assembly entries
+// count at the C++ call boundary without changing the interpreter entry ABI.
 static std::atomic<uint64_t> scarletJavaScriptExecutionEntries { 0 };
 
 extern "C" uint64_t scarlet_jsc_execution_entry_count()
 {
     return scarletJavaScriptExecutionEntries.load(std::memory_order_relaxed);
 }
+
+extern "C" void scarlet_jsc_record_execution_entry()
+{
+    scarletJavaScriptExecutionEntries.fetch_add(1, std::memory_order_relaxed);
+}
 #endif
+
+#if ENABLE(C_LOOP)
+// Non-JIT (i.e. C Loop LLINT) case:
 
 EncodedJSValue vmEntryToJavaScript(void* executableAddress, VM* vm, ProtoCallFrame* protoCallFrame)
 {
 #if OS(SCARLET)
-    scarletJavaScriptExecutionEntries.fetch_add(1, std::memory_order_relaxed);
+    scarlet_jsc_record_execution_entry();
     if (std::getenv("SCARLET_GC_DIAGNOSTICS"))
         std::printf("SCARLET_CLOOP_ENTRY vm=%p trap_bits=%p offset=%td\n", vm, vm->traps().trapBitsAddress(), static_cast<uint8_t*>(vm->traps().trapBitsAddress()) - reinterpret_cast<uint8_t*>(vm));
 #endif
