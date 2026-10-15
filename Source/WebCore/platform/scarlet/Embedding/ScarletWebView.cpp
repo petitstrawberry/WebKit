@@ -106,6 +106,8 @@ struct ScarletWebView {
         std::unique_ptr<ScarletSkiaVulkan::Surface> surface;
         uint64_t lease { 0 };
         uint64_t imageIdentifier { 0 };
+        bool pendingFullPaint { true };
+        IntRect pendingDamage;
         uint32_t width { 0 }, height { 0 };
     };
     std::array<GpuSlot, 2> gpuSlots;
@@ -249,6 +251,7 @@ int32_t paint(ScarletWebView& view)
         return SWV_EMPTY;
     if (!view.loadState.needsPaint && !frameView->needsLayout() && view.surface)
         return SWV_OK;
+    bool neededLayout = frameView->needsLayout();
     document->updateLayoutIgnorePendingStylesheets();
     if (!frameView->renderView())
         return SWV_EMPTY;
@@ -257,15 +260,42 @@ int32_t paint(ScarletWebView& view)
 
     auto size = cssSize(view);
     IntRect damage { IntPoint { }, size };
-#if !USE(SKIA)
+#if USE(SKIA)
+    ScarletWebView::GpuSlot* target = nullptr;
+    for (auto& slot : view.gpuSlots) {
+        if (slot.surface.get() == view.surface)
+            target = &slot;
+    }
+    // An acquired page image is immutable until its owner lease is returned.
+    if (!target || target->lease) return SWV_FAILED;
+    // Layout may generate more damage. Fan it out only after layout and before
+    // consuming the global invalidation, including slots leased by the UI.
+    bool fullPaint = neededLayout || view.loadState.fullPaint
+        || (view.loadState.needsPaint && view.loadState.dirtyRect.isEmpty());
+    for (auto& slot : view.gpuSlots) {
+        if (fullPaint) {
+            slot.pendingFullPaint = true;
+            slot.pendingDamage = { };
+        } else if (!slot.pendingFullPaint)
+            slot.pendingDamage.unite(view.loadState.dirtyRect);
+    }
+    if (!target->pendingFullPaint)
+        damage.intersect(target->pendingDamage);
+#else
     if (view.surface && !view.loadState.fullPaint && !view.loadState.dirtyRect.isEmpty())
         damage.intersect(view.loadState.dirtyRect);
 #endif
     view.loadState.needsPaint = false;
     view.loadState.fullPaint = false;
     view.loadState.dirtyRect = { };
-    if (damage.isEmpty())
+    if (damage.isEmpty()) {
+#if USE(SKIA)
+        target->pendingDamage = { };
+        return SWV_EMPTY;
+#else
         return SWV_OK;
+#endif
+    }
 #if USE(SKIA)
     if (!view.surface) return SWV_FAILED;
     {
@@ -282,6 +312,9 @@ int32_t paint(ScarletWebView& view)
         view.loadState.error = "WebCore Vulkan page submission failed."_s;
         return SWV_FAILED;
     }
+    // Only this allocation has caught up. Other slots retain all missed damage.
+    target->pendingFullPaint = false;
+    target->pendingDamage = { };
 #else
     auto surface = view.surface;
     if (!surface)
@@ -581,6 +614,7 @@ extern "C" int32_t scarlet_webview_navigate(ScarletWebView* view, SWVBytes urlBy
     screenForView(*view);
     view->loadState.error = { };
     view->loadState.needsPaint = true;
+    view->loadState.fullPaint = true;
     FrameLoadRequest request { *view->frame, ResourceRequest { WTF::move(url) } };
     request.setIsRequestFromClientOrUserInput();
     view->frame->loader().load(WTF::move(request));
@@ -603,6 +637,7 @@ extern "C" int32_t scarlet_webview_resize(ScarletWebView* view, uint32_t width, 
     view->surface = nullptr;
     view->publishedPixels.clear();
     view->loadState.needsPaint = true;
+    view->loadState.fullPaint = true;
     screenForView(*view);
     view->page->setDeviceScaleFactor(scale);
     if (RefPtr frameView = view->frame->view()) {
@@ -618,6 +653,7 @@ extern "C" int32_t scarlet_webview_reload(ScarletWebView* view)
     if (status != SWV_OK)
         return status;
     view->loadState.needsPaint = true;
+    view->loadState.fullPaint = true;
     view->frame->loader().reload({ }, true);
     return SWV_OK;
 }
@@ -630,6 +666,7 @@ extern "C" int32_t scarlet_webview_back(ScarletWebView* view)
     if (!view->page->backForward().canGoBackOrForward(-1))
         return SWV_EMPTY;
     view->loadState.needsPaint = true;
+    view->loadState.fullPaint = true;
     return view->page->backForward().goBack() ? SWV_OK : SWV_FAILED;
 }
 
@@ -641,6 +678,7 @@ extern "C" int32_t scarlet_webview_forward(ScarletWebView* view)
     if (!view->page->backForward().canGoBackOrForward(1))
         return SWV_EMPTY;
     view->loadState.needsPaint = true;
+    view->loadState.fullPaint = true;
     return view->page->backForward().goForward() ? SWV_OK : SWV_FAILED;
 }
 
@@ -768,10 +806,11 @@ extern "C" int32_t scarlet_webview_gpu_frame(ScarletWebView* view, SWVGpuFrame* 
             slot.surface = device->createSurface(view->width, view->height);
             if (!slot.surface) { view->loadState.error = "Native shared page image allocation failed."_s; return SWV_FAILED; }
             slot.imageIdentifier = ++view->nextImageIdentifier;
+            slot.pendingFullPaint = true;
+            slot.pendingDamage = { };
             slot.width = view->width; slot.height = view->height;
         }
         view->surface = slot.surface.get();
-        view->loadState.needsPaint = true; // This free target may contain an older revision.
         status = paint(*view);
         if (status != SWV_OK) return status;
         auto handle = slot.surface->duplicateHandle();
