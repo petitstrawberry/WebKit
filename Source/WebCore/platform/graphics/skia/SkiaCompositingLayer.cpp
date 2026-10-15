@@ -54,12 +54,67 @@ WTF_IGNORE_WARNINGS_IN_THIRD_PARTY_CODE_END
 #include <wtf/Scope.h>
 #include <wtf/SetForScope.h>
 #include <wtf/TZoneMallocInlines.h>
+#if PLATFORM(SCARLET)
+#include <array>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#endif
 
 namespace WebCore {
 
 WTF_MAKE_TZONE_ALLOCATED_IMPL(SkiaCompositingLayer);
 
 static constexpr float s_opacityVisibilityThreshold = 0.01;
+
+#if PLATFORM(SCARLET)
+// Owner-thread diagnostics only. No clocks, counters, or output when disabled.
+struct ScarletScenePaintProfile {
+    bool enabled { [] {
+        const char* value = std::getenv("SCARLET_WEBVIEW_PROFILE");
+        return value && !std::strcmp(value, "1");
+    }() };
+    MonotonicTime periodStart;
+    uint64_t paints { 0 };
+    std::array<uint64_t, 4> phaseMicros { };
+    uint64_t intermediateSurfaces { 0 }, maskSurfaces { 0 }, filterSurfaces { 0 };
+
+    static uint64_t micros(MonotonicTime begin, MonotonicTime end)
+    {
+        double value = (end - begin).microseconds();
+        if (!(value > 0))
+            return 0;
+        return value >= static_cast<double>(UINT64_MAX) ? UINT64_MAX : static_cast<uint64_t>(value);
+    }
+    static void add(uint64_t& counter, uint64_t value)
+    {
+        counter = value > UINT64_MAX - counter ? UINT64_MAX : counter + value;
+    }
+    void record(const void* root, const std::array<MonotonicTime, 5>& times)
+    {
+        if (!periodStart)
+            periodStart = times.front();
+        add(paints, 1);
+        for (size_t i = 0; i < phaseMicros.size(); ++i)
+            add(phaseMicros[i], micros(times[i], times[i + 1]));
+        if ((times.back() - periodStart).seconds() < 1)
+            return;
+        auto printable = [](uint64_t value) { return static_cast<unsigned long long>(value); };
+        std::fprintf(stderr, "SCARLET_SCENE_PROFILE root=%p period_us=%llu paints=%llu transforms_us=%llu damage_us=%llu draw_us=%llu cleanup_us=%llu intermediate_surfaces=%llu mask_surfaces=%llu filter_surfaces=%llu\n",
+            root, printable(micros(periodStart, times.back())), printable(paints),
+            printable(phaseMicros[0]), printable(phaseMicros[1]), printable(phaseMicros[2]), printable(phaseMicros[3]),
+            printable(intermediateSurfaces), printable(maskSurfaces), printable(filterSurfaces));
+        periodStart = times.back();
+        paints = intermediateSurfaces = maskSurfaces = filterSurfaces = 0;
+        phaseMicros = { };
+    }
+};
+static ScarletScenePaintProfile& scarletScenePaintProfile()
+{
+    static thread_local ScarletScenePaintProfile profile;
+    return profile;
+}
+#endif
 
 Ref<SkiaCompositingLayer> SkiaCompositingLayer::create()
 {
@@ -566,8 +621,15 @@ bool SkiaCompositingLayer::computeTransformsAndAnimations(const TransformationMa
 
 bool SkiaCompositingLayer::paint(SkCanvas& canvas, std::optional<Damage>& frameDamage, const std::optional<Damage>& priorTargetDamage, std::optional<SkColor> clearColor, Vector<Function<void(MonotonicTime)>>* presentationCallbacks)
 {
+#if PLATFORM(SCARLET)
+    auto& profile = scarletScenePaintProfile();
+    auto profileStart = profile.enabled ? MonotonicTime::now() : MonotonicTime { };
+#endif
     // Both walks below assume the animations have been applied and the transforms computed.
     bool hasRunningAnimations = computeTransformsAndAnimations({ }, { }, MonotonicTime::now());
+#if PLATFORM(SCARLET)
+    auto profileTransformsEnd = profile.enabled ? MonotonicTime::now() : MonotonicTime { };
+#endif
 
 #if ENABLE(DAMAGE_TRACKING)
     // Collect the damage in a walk of its own first, so it is complete before the walk that draws. Each
@@ -616,6 +678,9 @@ bool SkiaCompositingLayer::paint(SkCanvas& canvas, std::optional<Damage>& frameD
     UNUSED_PARAM(priorTargetDamage);
 #endif
 
+#if PLATFORM(SCARLET)
+    auto profileDamageEnd = profile.enabled ? MonotonicTime::now() : MonotonicTime { };
+#endif
     // An empty region means the target already holds the frame, so draw nothing and skip the clear.
     const bool skipDraw = damageRegion && damageRegion->isEmpty();
     if (!skipDraw) {
@@ -639,7 +704,14 @@ bool SkiaCompositingLayer::paint(SkCanvas& canvas, std::optional<Damage>& frameD
         context.imageSetBatch.flushIfNeeded(canvas);
     }
 
+#if PLATFORM(SCARLET)
+    auto profileDrawEnd = profile.enabled ? MonotonicTime::now() : MonotonicTime { };
+#endif
     recursiveCleanUpAfterPaint();
+#if PLATFORM(SCARLET)
+    if (profile.enabled)
+        profile.record(this, { profileStart, profileTransformsEnd, profileDamageEnd, profileDrawEnd, MonotonicTime::now() });
+#endif
 
     return hasRunningAnimations;
 }
@@ -1189,6 +1261,10 @@ sk_sp<SkImage> SkiaCompositingLayer::maskImage()
 
     auto* grContext = PlatformDisplay::sharedDisplay().skiaGrContext();
     auto imageInfo = SkImageInfo::Make(rect.width(), rect.height(), kRGBA_8888_SkColorType, kPremul_SkAlphaType, SkColorSpace::MakeSRGB());
+#if PLATFORM(SCARLET)
+    if (auto& profile = scarletScenePaintProfile(); profile.enabled)
+        ScarletScenePaintProfile::add(profile.maskSurfaces, 1);
+#endif
     auto surface = SkSurfaces::RenderTarget(grContext, skgpu::Budgeted::kNo, imageInfo, 0, kTopLeft_GrSurfaceOrigin, nullptr);
     if (!surface)
         return nullptr;
@@ -1225,6 +1301,10 @@ void SkiaCompositingLayer::paintWithIntermediateSurface(SkCanvas& canvas, PaintC
 
     auto* grContext = PlatformDisplay::sharedDisplay().skiaGrContext();
     auto imageInfo = SkImageInfo::Make(surfaceRect.width(), surfaceRect.height(), kRGBA_8888_SkColorType, kPremul_SkAlphaType, SkColorSpace::MakeSRGB());
+#if PLATFORM(SCARLET)
+    if (auto& profile = scarletScenePaintProfile(); profile.enabled)
+        ScarletScenePaintProfile::add(profile.intermediateSurfaces, 1);
+#endif
     auto surface = SkSurfaces::RenderTarget(grContext, skgpu::Budgeted::kNo, imageInfo, 0, kTopLeft_GrSurfaceOrigin, nullptr);
     if (!surface)
         return;
@@ -1446,6 +1526,10 @@ void SkiaCompositingLayer::paintWithFilter(SkCanvas& canvas, PaintContext& conte
         return;
 
     auto imageInfo = SkImageInfo::Make(surfaceRect.width(), surfaceRect.height(), kRGBA_8888_SkColorType, kPremul_SkAlphaType, SkColorSpace::MakeSRGB());
+#if PLATFORM(SCARLET)
+    if (auto& profile = scarletScenePaintProfile(); profile.enabled)
+        ScarletScenePaintProfile::add(profile.filterSurfaces, 1);
+#endif
     auto surface = SkSurfaces::RenderTarget(grContext, skgpu::Budgeted::kNo, imageInfo, 0, kTopLeft_GrSurfaceOrigin, nullptr);
     if (!surface)
         return;

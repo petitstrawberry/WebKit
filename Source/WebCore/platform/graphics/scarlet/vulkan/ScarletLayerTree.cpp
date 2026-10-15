@@ -14,6 +14,9 @@
 #include "TransformationMatrix.h"
 #include <skia/gpu/ganesh/GrDirectContext.h>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
 #include <wtf/MainThread.h>
 namespace WebCore {
 std::unique_ptr<ScarletLayerTree> ScarletLayerTree::create(Function<void()>&& schedule)
@@ -205,7 +208,29 @@ bool ScarletLayerTree::paint(SkCanvas& canvas, std::optional<Damage>& frameDamag
     const std::optional<Damage>& priorTargetDamage, std::optional<SkColor> clearColor)
 {
     assertIsOwner();
-    RELEASE_ASSERT(!m_detached && PlatformDisplay::sharedDisplay().prepareSkiaContext());
+    RELEASE_ASSERT(!m_detached);
+    static const bool profileEnabled = [] {
+        const char* value = std::getenv("SCARLET_WEBVIEW_PROFILE");
+        return value && !std::strcmp(value, "1");
+    }();
+    auto profileStart = profileEnabled ? MonotonicTime::now() : MonotonicTime { };
+    RELEASE_ASSERT(PlatformDisplay::sharedDisplay().prepareSkiaContext());
+    if (profileEnabled) {
+        auto end = MonotonicTime::now();
+        static thread_local MonotonicTime periodStart;
+        static thread_local uint64_t paints { 0 }, prepareMicros { 0 };
+        if (!periodStart)
+            periodStart = profileStart;
+        ++paints;
+        prepareMicros += static_cast<uint64_t>(std::max(0.0, (end - profileStart).microseconds()));
+        if ((end - periodStart).seconds() >= 1) {
+            std::fprintf(stderr, "SCARLET_SCENE_CONTEXT_PROFILE tree=%p period_us=%llu paints=%llu prepare_us=%llu\\n",
+                static_cast<void*>(this), static_cast<unsigned long long>((end - periodStart).microseconds()),
+                static_cast<unsigned long long>(paints), static_cast<unsigned long long>(prepareMicros));
+            periodStart = end;
+            paints = prepareMicros = 0;
+        }
+    }
     m_presentationCallbacks.clear();
     m_compositionRequired = false;
     m_runningAnimations = m_sceneRoot->paint(canvas, frameDamage, priorTargetDamage, clearColor, &m_presentationCallbacks);
