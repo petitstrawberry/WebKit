@@ -63,6 +63,10 @@ RefPtr<CoordinatedPlatformLayer> CoordinatedPlatformLayerBufferProxy::protectedL
     return m_layer;
 }
 
+bool CoordinatedPlatformLayerBufferProxy::isValid() const
+{
+    return !!protectedLayer();
+}
 void CoordinatedPlatformLayerBufferProxy::invalidate()
 {
     assertIsMainThread();

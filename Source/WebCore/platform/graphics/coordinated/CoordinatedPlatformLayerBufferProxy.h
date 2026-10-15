@@ -50,7 +50,7 @@ public:
     ~CoordinatedPlatformLayerBufferProxy();
 
     void invalidate();
-    bool isValid() const { return !!protectedLayer(); }
+    bool isValid() const;
 #if PLATFORM(SCARLET)
     RefPtr<RunLoop> scarletCompositingRunLoop() const { return m_scarletRunLoop; }
 #endif

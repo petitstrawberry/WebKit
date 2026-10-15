@@ -125,7 +125,7 @@ ScarletLayerTree::ScarletLayerTree(Function<void()>&& schedule)
     : m_scheduleRenderingUpdate(WTF::move(schedule))
     , m_ownerRunLoop(RunLoop::currentSingleton())
     , m_workQueue(WorkQueue::create("org.webkit.ScarletCompositor"_s))
-    , m_timer(m_workQueue->runLoop(), "ScarletCompositor::Render"_s, this, &ScarletLayerTree::render)
+    , m_timer(m_workQueue->runLoop(), "ScarletCompositor::Render"_s, [this] { render(); })
 {
     sk_sp<GrContextThreadSafeProxy> proxy;
     m_workQueue->dispatchSync([&] {
@@ -133,13 +133,13 @@ ScarletLayerTree::ScarletLayerTree(Function<void()>&& schedule)
         if (!display.prepareSkiaContext()) return;
         proxy = display.skiaGrContext()->threadSafeProxy();
         m_maxTextureSize = display.skiaGrContext()->maxTextureSize();
-        m_scene = makeUnique<Scene>();
+        m_scene = std::make_unique<Scene>();
         m_scene->root->setAnchorPoint({ 0, 0, 0 });
         m_scene->root->setMasksToBounds(true);
         m_scene->root->setDamagePropagationEnabled(true);
 
     });
-    if (proxy) m_paintingEngine = SkiaPaintingEngine::create(proxy);
+    if (proxy) m_paintingEngine = SkiaPaintingEngine::create(WTF::move(proxy));
     m_output->wake = [this, weak = std::weak_ptr<Output>(m_output), queue = m_workQueue.copyRef()] {
         if (m_wakeQueued.exchange(true)) return;
         queue->dispatch([this, weak] {

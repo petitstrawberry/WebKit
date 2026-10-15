@@ -218,21 +218,6 @@ private:
     ThreadSafeWeakPtr<MediaPlayerPrivateScarlet> m_player;
 };
 
-MediaPlayerPrivateScarlet::MediaPlayerPrivateScarlet(MediaPlayer& player)
-    : m_player(player)
-    , m_timer(RunLoop::currentSingleton(), "MediaPlayerPrivateScarlet::Poll"_s, this, &MediaPlayerPrivateScarlet::poll)
-{
-    m_status.paused = true;
-}
-MediaPlayerPrivateScarlet::~MediaPlayerPrivateScarlet()
-{
-    // MediaPlayer clears or replaces m_private before releasing this engine.
-    // Cleanup must not notify a live player whose active engine is now null
-    // or a different instance. Explicit cancelLoad still reports Empty.
-    m_player = nullptr;
-    cancelLoad();
-}
-
 void MediaPlayerPrivateScarlet::load(const URL& url, const LoadOptions&)
 {
     cancelLoad();
@@ -696,7 +681,7 @@ struct MediaPlayerPrivateScarlet::VideoFramePump {
     VideoFramePump(RunLoop& loop, ScarletMediaSession* s, CoordinatedPlatformLayerBufferProxy& p,
         MediaPlayerPrivateScarlet& media)
         : runLoop(loop)
-        , timer(loop, "ScarletVideoFramePump"_s, this, &VideoFramePump::poll)
+        , timer(loop, "ScarletVideoFramePump"_s, [this] { poll(); })
         , session(s), proxy(p), player(media), owner(RunLoop::currentSingleton())
         , generation(media.m_videoPresentationGeneration)
         , proxyGeneration(media.m_compositorProxyGeneration), serial(media.m_videoFrameSerial)
@@ -762,6 +747,21 @@ void MediaPlayerPrivateScarlet::stopFramePump()
     done.wait();
 }
 #endif
+MediaPlayerPrivateScarlet::MediaPlayerPrivateScarlet(MediaPlayer& player)
+    : m_player(player)
+    , m_timer(RunLoop::currentSingleton(), "MediaPlayerPrivateScarlet::Poll"_s, this, &MediaPlayerPrivateScarlet::poll)
+{
+    m_status.paused = true;
+}
+MediaPlayerPrivateScarlet::~MediaPlayerPrivateScarlet()
+{
+    // MediaPlayer clears or replaces m_private before releasing this engine.
+    // Cleanup must not notify a live player whose active engine is now null
+    // or a different instance. Explicit cancelLoad still reports Empty.
+    m_player = nullptr;
+    cancelLoad();
+}
+
 void MediaPlayerPrivateScarlet::updateFrame()
 {
     if (!m_session)
@@ -948,7 +948,7 @@ bool MediaPlayerPrivateScarlet::pushFrameToCompositor()
     if (m_framePump) return true;
     auto loop = m_contentsBufferProxy->scarletCompositingRunLoop();
     if (!loop) return false;
-    m_framePump = makeUnique<VideoFramePump>(*loop, m_session, *m_contentsBufferProxy, *this);
+    m_framePump = std::make_unique<VideoFramePump>(*loop, m_session, *m_contentsBufferProxy, *this);
     // Publish the initial owner image as a promise for the compositor context.
     if (m_image) {
         auto image = m_image->platformImage();
