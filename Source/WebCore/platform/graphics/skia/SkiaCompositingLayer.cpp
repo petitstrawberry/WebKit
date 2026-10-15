@@ -1322,7 +1322,7 @@ void SkiaCompositingLayer::paintWithIntermediateSurface(SkCanvas& canvas, PaintC
     context.imageSetBatch.flushIfNeeded(canvas);
 
     surfaceCanvas->clear(SK_ColorTRANSPARENT);
-    surfaceCanvas->translate(-surfaceRect.x(), -surfaceRect.y());
+    surfaceCanvas->translate(-static_cast<float>(surfaceRect.x()), -static_cast<float>(surfaceRect.y()));
     surfaceCanvas->concat(canvas.getLocalToDevice());
 
     {
@@ -1541,6 +1541,39 @@ struct ScarletFilterSurfaceGeometry {
     sk_sp<SkImageFilter> filter;
 };
 
+// Check before narrowing: saturating integer enclosure would silently change
+// a finite out-of-range origin while apparently preserving its small extent.
+static std::optional<std::array<int, 4>> scarletFilterIntegerBounds(double left, double top, double right, double bottom)
+{
+    left = std::floor(left);
+    top = std::floor(top);
+    right = std::ceil(right);
+    bottom = std::ceil(bottom);
+    constexpr double min = std::numeric_limits<int>::min();
+    constexpr double max = std::numeric_limits<int>::max();
+    if (!std::isfinite(left) || !std::isfinite(top) || !std::isfinite(right) || !std::isfinite(bottom)
+        || left < min || top < min || right > max || bottom > max
+        || right <= left || bottom <= top || right - left > max || bottom - top > max)
+        return std::nullopt;
+    return std::array<int, 4> { static_cast<int>(left), static_cast<int>(top),
+        static_cast<int>(right - left), static_cast<int>(bottom - top) };
+}
+static std::optional<IntRect> scarletEnclosingFilterRect(const SkRect& rect)
+{
+    auto bounds = scarletFilterIntegerBounds(rect.left(), rect.top(), rect.right(), rect.bottom());
+    if (!bounds)
+        return std::nullopt;
+    return IntRect { (*bounds)[0], (*bounds)[1], (*bounds)[2], (*bounds)[3] };
+}
+static float scarletFilterCoordinateFit(const SkRect& rect)
+{
+    const double extent = std::max({ std::abs(static_cast<double>(rect.left())), std::abs(static_cast<double>(rect.top())),
+        std::abs(static_cast<double>(rect.right())), std::abs(static_cast<double>(rect.bottom())), 1.0 });
+    // Refit the existing layer-plane scale instead of clamping an invalid
+    // origin. Half the integer range leaves space for outward rounding.
+    return static_cast<float>((std::numeric_limits<int>::max() / 2.0) / extent);
+}
+
 // Fit both the full input and the visible output before allocating any GPU
 // texture. The existing layer-plane path maps a smaller surface back to its
 // original geometry, so an oversized filter loses resolution rather than area.
@@ -1559,12 +1592,11 @@ static std::optional<ScarletFilterSurfaceGeometry> scarletFilterSurfaceGeometry(
         if (!scaledBounds.isFinite() || scaledBounds.isEmpty())
             return std::nullopt;
         float ratio = std::min(available / scaledBounds.width(), available / scaledBounds.height());
-        if (ratio >= 1) {
-            const IntRect sourceRect = enclosingIntRect(FloatRect(scaledBounds));
-            if (sourceRect.isEmpty())
-                return std::nullopt;
+        const auto enclosedSource = scarletEnclosingFilterRect(scaledBounds);
+        if (ratio >= 1 && enclosedSource) {
+            const IntRect sourceRect = *enclosedSource;
             auto layerToSurface = layerToScaled;
-            layerToSurface.postTranslate(-sourceRect.x(), -sourceRect.y());
+            layerToSurface.postTranslate(-static_cast<float>(sourceRect.x()), -static_cast<float>(sourceRect.y()));
             auto filter = originalFilter.makeWithLocalMatrix(layerToSurface);
             if (!filter)
                 return std::nullopt;
@@ -1575,12 +1607,15 @@ static std::optional<ScarletFilterSurfaceGeometry> scarletFilterSurfaceGeometry(
                 return std::nullopt;
             ratio = std::min(available / outputBounds.width(), available / outputBounds.height());
             if (ratio >= 1) {
-                const IntRect outputRect = enclosingIntRect(FloatRect(outputBounds));
-                if (sourceRect.width() <= maxSize && sourceRect.height() <= maxSize
-                    && outputRect.width() <= maxSize && outputRect.height() <= maxSize)
-                    return ScarletFilterSurfaceGeometry { scale, deviceAlignedTransform, layerToScaled, sourceRect, outputRect, WTF::move(filter) };
+                if (const auto outputRect = scarletEnclosingFilterRect(outputBounds)) {
+                    if (sourceRect.width() <= maxSize && sourceRect.height() <= maxSize
+                        && outputRect->width() <= maxSize && outputRect->height() <= maxSize)
+                        return ScarletFilterSurfaceGeometry { scale, deviceAlignedTransform, layerToScaled, sourceRect, *outputRect, WTF::move(filter) };
+                } else
+                    ratio = scarletFilterCoordinateFit(outputBounds);
             }
-        }
+        } else if (ratio >= 1)
+            ratio = scarletFilterCoordinateFit(scaledBounds);
         if (!(ratio > 0) || !std::isfinite(ratio))
             return std::nullopt;
         // Keep the same aspect ratio and filter coordinates. A tiny safety
@@ -1642,7 +1677,7 @@ void SkiaCompositingLayer::paintWithFilter(SkCanvas& canvas, PaintContext& conte
     context.imageSetBatch.flushIfNeeded(canvas);
 
     surfaceCanvas->clear(SK_ColorTRANSPARENT);
-    surfaceCanvas->translate(-surfaceRect.x(), -surfaceRect.y());
+    surfaceCanvas->translate(-static_cast<float>(surfaceRect.x()), -static_cast<float>(surfaceRect.y()));
     surfaceCanvas->concat(layerToScaled);
     surfaceCanvas->concat(SkM44(inverseLayerTransform));
 
@@ -1660,7 +1695,7 @@ void SkiaCompositingLayer::paintWithFilter(SkCanvas& canvas, PaintContext& conte
 #else
     // Filter parameters are in layer units, the surface is in scaled pixels relative to its origin.
     auto layerToSurface = layerToScaled;
-    layerToSurface.postTranslate(-surfaceRect.x(), -surfaceRect.y());
+    layerToSurface.postTranslate(-static_cast<float>(surfaceRect.x()), -static_cast<float>(surfaceRect.y()));
     auto filter = layerPaint.refImageFilter()->makeWithLocalMatrix(layerToSurface);
 
     // The filter output only has to cover the visible part of the layer plane, and has to fit in a texture.
@@ -1668,7 +1703,7 @@ void SkiaCompositingLayer::paintWithFilter(SkCanvas& canvas, PaintContext& conte
     const auto deviceToLayer = inverseLayerPlaneTransform(TransformationMatrix(canvas.getLocalToDevice()).multiply(layerTransform));
     auto clipRect = deviceToLayer ? FloatRect(layerPlaneClipBounds(*deviceToLayer, FloatRect(canvas.getDeviceClipBounds()))) : FloatRect();
     clipRect = layerToScaled.mapRect(clipRect);
-    clipRect.move(-surfaceRect.x(), -surfaceRect.y());
+    clipRect.move(-static_cast<float>(surfaceRect.x()), -static_cast<float>(surfaceRect.y()));
     auto outputRect = intersection(enclosingIntRect(FloatRect(filter->computeFastBounds(sourceBounds))), enclosingIntRect(clipRect));
     outputRect.setWidth(std::min(outputRect.width(), maxSurfaceSize));
     outputRect.setHeight(std::min(outputRect.height(), maxSurfaceSize));
