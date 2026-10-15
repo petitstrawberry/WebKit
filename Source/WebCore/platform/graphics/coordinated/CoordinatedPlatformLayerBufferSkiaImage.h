@@ -27,6 +27,7 @@
 
 #if USE(COORDINATED_GRAPHICS) && USE(SKIA) && !USE(TEXTURE_MAPPER)
 #include "CoordinatedPlatformLayerBuffer.h"
+#include <wtf/SharedTask.h>
 
 WTF_IGNORE_WARNINGS_IN_THIRD_PARTY_CODE_BEGIN
 #include <skia/gpu/ganesh/GrContextThreadSafeProxy.h>
@@ -52,7 +53,7 @@ private:
     sk_sp<SkImage> skiaImage() override { return m_image; }
 
     sk_sp<SkImage> m_image;
-    Function<void(MonotonicTime)> m_presentationCallback;
+    RefPtr<SharedTask<void(MonotonicTime)>> m_presentationCallback;
 };
 
 } // namespace WebCore

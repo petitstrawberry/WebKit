@@ -121,12 +121,23 @@ CoordinatedPlatformLayerBufferSkiaImage::CoordinatedPlatformLayerBufferSkiaImage
 
 void CoordinatedPlatformLayerBufferSkiaImage::setPresentationCallback(Function<void(MonotonicTime)>&& callback)
 {
-    m_presentationCallback = WTF::move(callback);
+    // Retain the one-shot payload independently from each paint attempt.
+    // A failed submission discards its wrapper without consuming the payload.
+    m_presentationCallback = createSharedTask<void(MonotonicTime)>([callback = WTF::move(callback)](MonotonicTime time) mutable {
+        if (auto presented = std::exchange(callback, { }))
+            presented(time);
+    });
 }
 
 Function<void(MonotonicTime)> CoordinatedPlatformLayerBufferSkiaImage::takePresentationCallback()
 {
-    return std::exchange(m_presentationCallback, { });
+    if (!m_presentationCallback)
+        return { };
+    return [callback = Ref { *m_presentationCallback }](MonotonicTime time) {
+        // Only successful submission invokes this wrapper. Multiple attempts
+        // share one payload, so duplicate successful wrappers cannot notify twice.
+        callback->run(time);
+    };
 }
 
 } // namespace WebCore
