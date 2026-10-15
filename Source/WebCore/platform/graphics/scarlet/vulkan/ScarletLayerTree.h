@@ -60,6 +60,7 @@ public:
     GraphicsLayerFactory* factory() { return this; }
     void setRootLayer(GraphicsLayer*);
     void setOverlayLayer(GraphicsLayer*);
+    int maximumTextureSize() const { return m_maxTextureSize; }
     void setViewport(const IntSize&, float, const IntSize& deviceSize);
     void setOutputEpoch(uint64_t);
     void discardOutput();

@@ -287,9 +287,10 @@ int32_t viewStatus(ScarletWebView* view)
         return status;
     return view && views.contains(view) ? SWV_OK : SWV_INVALID_ARGUMENT;
 }
+constexpr uint32_t maximumPhysicalDimension = 4096;
 bool validSize(uint32_t width, uint32_t height, double scale)
 {
-    return width && height && width <= 4096 && height <= 4096
+    return width && height && width <= maximumPhysicalDimension && height <= maximumPhysicalDimension
         && std::isfinite(scale) && scale >= .25 && scale <= 8
         && std::ceil(width / scale) <= 16384 && std::ceil(height / scale) <= 16384;
 }
@@ -988,6 +989,18 @@ extern "C" int32_t scarlet_webview_navigate(ScarletWebView* view, SWVBytes urlBy
     request.setIsRequestFromClientOrUserInput();
     view->frame->loader().load(WTF::move(request));
     return SWV_OK;
+}
+
+extern "C" int32_t scarlet_webview_maximum_surface_dimension(ScarletWebView* view, uint32_t* out)
+{
+    auto status = viewStatus(view);
+    if (status != SWV_OK) return status;
+    if (!out) return SWV_INVALID_ARGUMENT;
+    *out = maximumPhysicalDimension;
+#if USE(COORDINATED_GRAPHICS)
+    *out = std::min(*out, static_cast<uint32_t>(view->layerTree->maximumTextureSize()));
+#endif
+    return *out ? SWV_OK : SWV_FAILED;
 }
 
 extern "C" int32_t scarlet_webview_resize(ScarletWebView* view, uint32_t width, uint32_t height, double scale)

@@ -101,6 +101,9 @@ int32_t scarlet_webview_navigate(ScarletWebView*, SWVBytes absolute_url);
 int32_t scarlet_webview_reload(ScarletWebView*);
 int32_t scarlet_webview_back(ScarletWebView*);
 int32_t scarlet_webview_forward(ScarletWebView*);
+/* Owner-only immutable surface limit, combining embedding and actual GPU limits.
+ * Hosts can lower backing scale while retaining CSS viewport/input coordinates. */
+int32_t scarlet_webview_maximum_surface_dimension(ScarletWebView*, uint32_t* out);
 int32_t scarlet_webview_resize(ScarletWebView*, uint32_t physical_width, uint32_t physical_height, double device_scale_factor);
 int32_t scarlet_webview_focus(ScarletWebView*, uint32_t focused);
 int32_t scarlet_webview_tick(ScarletWebView*); /* Nonblocking native RunLoop cycle + layout/CPU paint. */
