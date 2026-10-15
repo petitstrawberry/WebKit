@@ -490,6 +490,7 @@ void ScarletLayerTree::detach()
         }
         std::lock_guard lock(m_output->mutex);
         m_output->live = false;
+        m_output->wake = nullptr;
         m_output->pending = false;
         for (auto& slot : m_output->slots) slot.ready = false;
     });
