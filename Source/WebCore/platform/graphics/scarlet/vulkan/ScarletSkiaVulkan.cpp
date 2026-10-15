@@ -560,7 +560,7 @@ int probe()
     return probePlanarYUVGPU(*owner, true);
 }
 }
-extern "C" int scarlet_webview_vulkan_probe() { return WebCore::probe(); }
+extern "C" int scarlet_skia_vulkan_probe() { return WebCore::probe(); }
 
 // Initialized C++ ELF TLS must be copied for every native thread. This also
 // checks that Rust's namespace header and C errno survive C++ TLS writes.

@@ -26,6 +26,11 @@ add_library(ScarletWebView STATIC
     "${CMAKE_CURRENT_LIST_DIR}/ScarletChromeClient.cpp"
     "${CMAKE_CURRENT_LIST_DIR}/ScarletBackForwardClient.cpp"
 )
+# Keep WebCore-level diagnostics above the standalone Skia/WTF library.
+if (USE_SKIA)
+    target_sources(ScarletWebView PRIVATE "${CMAKE_CURRENT_LIST_DIR}/ScarletSkiaVulkanProbe.cpp")
+endif ()
+
 # Legacy storage sources normally receive their platform configuration from
 # their parent target. This embedding builds them with WebCore's native config.
 set_source_files_properties(
