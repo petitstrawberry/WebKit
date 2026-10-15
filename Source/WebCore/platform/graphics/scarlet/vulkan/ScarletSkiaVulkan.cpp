@@ -254,7 +254,7 @@ int initialize(DeviceState& owner)
     owner.shared = sharedDevice();
     if (!owner.shared)
         return 1;
-    auto dispatch = owner.shared->dispatch;
+    Dispatch dispatch = owner.shared->dispatch;
     owner.dispatch = dispatch;
     auto physical = owner.shared->physical;
     auto queue = owner.shared->queue;
