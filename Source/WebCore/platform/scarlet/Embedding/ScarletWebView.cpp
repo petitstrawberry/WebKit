@@ -615,10 +615,8 @@ int32_t paintCoordinated(ScarletWebView& view)
     view.page->willStartRenderingUpdateDisplay();
     // The tree applies DPR on its scene root. A second canvas scale would
     // incorrectly scale both content and the device-space damage.
-    bool runningAnimations = view.layerTree->paint(*view.surface->skSurface().getCanvas(), sceneDamage, priorTargetDamage, SK_ColorWHITE);
+    view.layerTree->paint(*view.surface->skSurface().getCanvas(), sceneDamage, priorTargetDamage, SK_ColorWHITE);
     auto profileRecordEnd = view.paintProfile.enabled ? MonotonicTime::now() : MonotonicTime { };
-    if (runningAnimations)
-        view.loadState.needsRenderingUpdate = true;
 
     // The retained scene consumes its current damage during paint. Preserve
     // that delta for every output allocation before any submission can fail.
@@ -1251,11 +1249,10 @@ extern "C" int32_t scarlet_webview_tick(ScarletWebView* view)
     // This runs real animation frame callbacks, timelines, resize/scroll
     // events, observers and rendering steps; the host never executes JS.
     RefPtr frameView = view->frame->view();
-    if (view->loadState.needsRenderingUpdate || view->loadState.needsPaint || (frameView && frameView->needsLayout())
 #if USE(COORDINATED_GRAPHICS)
-        || view->layerTree->needsComposition()
+    bool performedRenderingUpdate = false;
 #endif
-    ) {
+    if (view->loadState.needsRenderingUpdate || view->loadState.needsPaint || (frameView && frameView->needsLayout())) {
         // Clear before running callbacks: animation frames and observers may
         // request the next update while this one is being completed.
         view->loadState.needsRenderingUpdate = false;
@@ -1272,8 +1269,13 @@ extern "C" int32_t scarlet_webview_tick(ScarletWebView* view)
             view->page->finalizeRenderingUpdate({ });
         }
 #if USE(COORDINATED_GRAPHICS)
-        // Page finalization already flushes the frame's GraphicsLayers. Commit
-        // their retained scene only after layout and all rendering steps finish.
+        performedRenderingUpdate = true;
+#endif
+    }
+#if USE(COORDINATED_GRAPHICS)
+    // Composition-only updates still commit new video buffers and sampled
+    // layer properties, without repeating Page's DOM/rendering lifecycle.
+    if (performedRenderingUpdate || view->layerTree->needsComposition()) {
         frameView = view->frame->view();
         if (frameView) {
 #if USE(SKIA)
@@ -1282,9 +1284,10 @@ extern "C" int32_t scarlet_webview_tick(ScarletWebView* view)
             if (!view->layerTree->flush(*frameView))
                 view->loadState.needsRenderingUpdate = true;
         }
+    }
+    if (performedRenderingUpdate)
         view->page->didUpdateRendering();
 #endif
-    }
     return SWV_OK;
 }
 

@@ -141,9 +141,16 @@ void ScarletLayerTree::notifyCompositionRequired()
     m_compositionRequired = true;
     m_scheduleRenderingUpdate();
 }
-void ScarletLayerTree::requestComposition(CompositionReason)
+void ScarletLayerTree::requestComposition(CompositionReason reason)
 {
-    notifyCompositionRequired();
+    assertIsOwner();
+    if (m_detached)
+        return;
+    m_compositionRequired = true;
+    // Video and compositor animations update retained scene state without
+    // requesting a Page rendering update or running DOM rendering steps.
+    if (reason == CompositionReason::RenderingUpdate)
+        m_scheduleRenderingUpdate();
 }
 int ScarletLayerTree::maxTextureSize() const
 {
@@ -256,8 +263,7 @@ bool ScarletLayerTree::paint(SkCanvas& canvas, std::optional<Damage>& frameDamag
     m_presentationCallbacks.clear();
     m_compositionRequired = false;
     m_runningAnimations = m_sceneRoot->paint(canvas, frameDamage, priorTargetDamage, clearColor, &m_presentationCallbacks);
-    if (m_runningAnimations)
-        m_scheduleRenderingUpdate();
+    // needsComposition() keeps animated scene frames scheduled.
     return m_runningAnimations;
 }
 void ScarletLayerTree::didSubmit(MonotonicTime time)
