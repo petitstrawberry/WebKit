@@ -44,6 +44,7 @@
 #include <skia/core/SkCanvas.h>
 #include <skia/core/SkSurface.h>
 #include <skia/core/SkColorSpace.h>
+#include <skia/gpu/ganesh/GrDirectContext.h>
 #else
 #include "GraphicsContextCairo.h"
 #endif
@@ -401,9 +402,20 @@ void reportProfile(ScarletWebView& view, MonotonicTime end)
     if (media.video_count)
         mediaTime = String::number(media.current_time);
     auto mediaTimeBytes = mediaTime.utf8();
+    int skiaBudgetedResources = 0;
+    size_t skiaBudgetedBytes = 0, skiaPurgeableBytes = 0, skiaLimitBytes = 0;
+    // Read existing owner-context CPU counters only: no lazy context creation,
+    // layout, resource purge, work-completion polling, or GPU submission.
+    if (auto* display = PlatformDisplay::sharedDisplayIfExists()) {
+        if (auto* context = display->skiaGrContext()) {
+            context->getResourceCacheUsage(&skiaBudgetedResources, &skiaBudgetedBytes);
+            skiaPurgeableBytes = context->getResourceCachePurgeableBytes();
+            skiaLimitBytes = context->getResourceCacheLimit();
+        }
+    }
     const auto& c = profile.counters;
     auto printable = [](uint64_t value) { return static_cast<unsigned long long>(value); };
-    std::fprintf(stderr, "SCARLET_WEBVIEW_PROFILE view=%p size=%ux%u period_us=%llu attempts=%llu failed_submits=%llu full=%llu layout=%llu explicit_full=%llu dirty_fallback=%llu slot_full=%llu painted_pixels=%llu paint_layout_us=%llu record_us=%llu record_flush_us=%llu record_tree_us=%llu record_scene_us=%llu submit_us=%llu max_paint_us=%llu ticks=%llu tick_us=%llu max_tick_us=%llu runloop_us=%llu rendering_update_us=%llu rendering_finalize_us=%llu scene_flush_us=%llu complete_requests=%llu complete_request_us=%llu max_complete_request_us=%llu gpu_completions=%llu gpu_completion_us=%llu max_gpu_completion_us=%llu video_index=0 video_count=%u video_width=%u video_height=%u video_decoded=%llu video_dropped=%llu video_presented=%llu video_time=%s\n",
+    std::fprintf(stderr, "SCARLET_WEBVIEW_PROFILE view=%p size=%ux%u period_us=%llu attempts=%llu failed_submits=%llu full=%llu layout=%llu explicit_full=%llu dirty_fallback=%llu slot_full=%llu painted_pixels=%llu paint_layout_us=%llu record_us=%llu record_flush_us=%llu record_tree_us=%llu record_scene_us=%llu submit_us=%llu max_paint_us=%llu ticks=%llu tick_us=%llu max_tick_us=%llu runloop_us=%llu rendering_update_us=%llu rendering_finalize_us=%llu scene_flush_us=%llu complete_requests=%llu complete_request_us=%llu max_complete_request_us=%llu gpu_completions=%llu gpu_completion_us=%llu max_gpu_completion_us=%llu skia_budgeted_resources=%d skia_budgeted_bytes=%llu skia_purgeable_bytes=%llu skia_limit_bytes=%llu video_index=0 video_count=%u video_width=%u video_height=%u video_decoded=%llu video_dropped=%llu video_presented=%llu video_time=%s\n",
         static_cast<void*>(&view), view.width, view.height, printable(profileMicroseconds(profile.periodStart, end)),
         printable(c.attempts), printable(c.failedSubmits), printable(c.full), printable(c.layout), printable(c.explicitFull),
         printable(c.dirtyFallback), printable(c.slotFull), printable(c.pixels), printable(c.paintLayoutMicros),
@@ -412,6 +424,7 @@ void reportProfile(ScarletWebView& view, MonotonicTime end)
         printable(c.tickMicros), printable(c.maxTickMicros), printable(c.runLoopMicros), printable(c.renderingUpdateMicros),
         printable(c.renderingFinalizeMicros), printable(c.sceneFlushMicros), printable(c.requests), printable(c.requestMicros), printable(c.maxRequestMicros),
         printable(c.gpuCompletions), printable(c.gpuCompletionMicros), printable(c.maxGpuCompletionMicros),
+        skiaBudgetedResources, printable(skiaBudgetedBytes), printable(skiaPurgeableBytes), printable(skiaLimitBytes),
         media.video_count, media.width, media.height, printable(media.decoded_frames),
         printable(media.dropped_frames), printable(media.presented_frames), reinterpret_cast<const char*>(mediaTimeBytes.data()));
     profile.counters = { };
