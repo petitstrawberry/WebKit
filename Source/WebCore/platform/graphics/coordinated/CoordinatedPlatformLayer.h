@@ -32,6 +32,7 @@
 #include "FloatPoint3D.h"
 #include "FloatSize.h"
 #include "PlatformLayerIdentifier.h"
+#include "Region.h"
 #include "TransformationMatrix.h"
 #include <wtf/EnumSet.h>
 #include <wtf/Lock.h>
@@ -146,6 +147,10 @@ public:
 
     void setVisibleRect(const FloatRect&);
     void setTransformedVisibleRect(IntRect&&);
+#if PLATFORM(SCARLET)
+    void setFilterInputCoverage(std::optional<Region>&&);
+    const std::optional<Region>& filterInputCoverage() const { assertIsMainThread(); return m_filterInputCoverage; }
+#endif
 
 #if ENABLE(SCROLLING_THREAD)
     void setScrollingNodeID(std::optional<ScrollingNodeID>) WTF_REQUIRES_LOCK(m_lock);
@@ -313,6 +318,9 @@ private:
     bool m_needsTilesUpdate WTF_GUARDED_BY_CAPABILITY(mainThread) { false };
     FloatRect m_visibleRect WTF_GUARDED_BY_CAPABILITY(mainThread);
     IntRect m_transformedVisibleRect WTF_GUARDED_BY_CAPABILITY(mainThread);
+#if PLATFORM(SCARLET)
+    std::optional<Region> m_filterInputCoverage WTF_GUARDED_BY_CAPABILITY(mainThread);
+#endif
     Vector<IntRect, 1> m_dirtyRegion WTF_GUARDED_BY_CAPABILITY(mainThread);
 
 #if ENABLE(DAMAGE_TRACKING)

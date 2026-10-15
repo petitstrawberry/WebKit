@@ -332,6 +332,17 @@ void CoordinatedPlatformLayer::setVisibleRect(const FloatRect& visibleRect)
     m_visibleRect = visibleRect;
 }
 
+#if PLATFORM(SCARLET)
+void CoordinatedPlatformLayer::setFilterInputCoverage(std::optional<Region>&& coverage)
+{
+    assertIsMainThread();
+    if (m_filterInputCoverage == coverage)
+        return;
+    m_filterInputCoverage = WTF::move(coverage);
+    m_needsTilesUpdate = true;
+}
+#endif
+
 void CoordinatedPlatformLayer::setTransformedVisibleRect(IntRect&& transformedVisibleRect)
 {
     assertIsMainThread();

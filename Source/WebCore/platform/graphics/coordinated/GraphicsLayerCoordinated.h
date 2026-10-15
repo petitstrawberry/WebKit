@@ -29,6 +29,7 @@
 #include "Damage.h"
 #include "GraphicsLayer.h"
 #include "GraphicsLayerTransform.h"
+#include "Region.h"
 #include <wtf/EnumSet.h>
 #include <wtf/OptionSet.h>
 
@@ -199,6 +200,9 @@ private:
     void updateBackdropFiltersRect();
     void updateAnimations();
     void updateVisibleRect(const FloatRect&);
+#if PLATFORM(SCARLET)
+    std::optional<Region> filterInputCoverage(const FloatRect&) const;
+#endif
     void updateIndicators();
     bool isRunningTransformAnimation() const;
     bool filtersCanBeComposited(const FilterOperations&) const;

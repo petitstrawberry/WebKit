@@ -24,6 +24,7 @@
 #include "IntPoint.h"
 #include "IntPointHash.h"
 #include "IntRect.h"
+#include "Region.h"
 #include <wtf/Assertions.h>
 #include <wtf/HashMap.h>
 #include <wtf/Lock.h>
@@ -135,7 +136,7 @@ private:
     CoordinatedBackingStoreProxy() = default;
 
     void invalidateRegion(const Vector<IntRect, 1>&);
-    void createOrDestroyTiles(const IntRect& unscaledVisibleRect, const IntRect& unscaledContentsRect, const IntSize& unscaledViewportSize, float contentsScale, int maxTextureSize, Damage&, Vector<uint32_t>& tilesToCreate, Vector<uint32_t>& tilesToRemove);
+    void createOrDestroyTiles(const IntRect& unscaledVisibleRect, const IntRect& unscaledContentsRect, const IntSize& unscaledViewportSize, float contentsScale, int maxTextureSize, Damage&, Vector<uint32_t>& tilesToCreate, Vector<uint32_t>& tilesToRemove, const Region* filterInputCoverage);
     IntSize computeTileSize(const IntSize& viewportSize, int maxTextureSize) const;
     std::pair<IntRect, IntRect> computeCoverAndKeepRect() const;
     void adjustForContentsRect(IntRect&) const;
@@ -154,6 +155,9 @@ private:
     IntRect m_visibleRect;
     IntRect m_coverRect;
     IntRect m_keepRect;
+    std::optional<Region> m_filterInputCoverage;
+    std::optional<Region> m_filterCover;
+    std::optional<Region> m_filterKeep;
     HashMap<IntPoint, Tile> m_tiles;
     RefPtr<CoordinatedAnimatedBackingStoreClient> m_animatedBackingStoreClient;
     struct {

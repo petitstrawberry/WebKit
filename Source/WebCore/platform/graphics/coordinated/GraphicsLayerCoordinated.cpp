@@ -37,6 +37,10 @@
 #include "CoordinatedPlatformLayerBuffer.h"
 #include "CoordinatedPlatformLayerBufferProxy.h"
 #include "FloatQuad.h"
+#if PLATFORM(SCARLET)
+#include "FilterOperation.h"
+#include "FEGaussianBlur.h"
+#endif
 #include "GraphicsLayerAsyncContentsDisplayDelegateCoordinated.h"
 #include "GraphicsLayerContentsDisplayDelegateCoordinated.h"
 #include "GraphicsLayerFactory.h"
@@ -1003,10 +1007,92 @@ void GraphicsLayerCoordinated::clampToSizeIfRectIsInfinite(FloatRect& rect, cons
     }
 }
 
+#if PLATFORM(SCARLET)
+// Keep separated shadow inputs separated. A bounding rectangle would raster
+// every empty tile between the viewport and a distant shadow source.
+static Region reverseFilterInput(Region region, const FilterOperations& filters)
+{
+    for (auto operation = filters.rbegin(); operation != filters.rend(); ++operation) {
+        IntSize blurOutset;
+        FloatSize offset;
+        bool shadow = false;
+        switch ((*operation)->type()) {
+        case FilterOperation::Type::Blur: {
+            auto deviation = downcast<BlurFilterOperation>(operation->get()).stdDeviation();
+            blurOutset = FEGaussianBlur::calculateOutsetSize({ deviation, deviation });
+            break;
+        }
+        case FilterOperation::Type::DropShadow: {
+            auto& drop = downcast<DropShadowFilterOperation>(operation->get());
+            float deviation = drop.stdDeviation();
+            blurOutset = FEGaussianBlur::calculateOutsetSize({ deviation, deviation });
+            offset = { -static_cast<float>(drop.x()), -static_cast<float>(drop.y()) };
+            shadow = true;
+            break;
+        }
+        default:
+            continue;
+        }
+        Region inputs;
+        for (auto rect : region.rects()) {
+            if (shadow)
+                inputs.unite(rect); // The preceding result also passes through.
+            FloatRect input(rect);
+            input.move(offset);
+            input.inflateX(blurOutset.width());
+            input.inflateY(blurOutset.height());
+            inputs.unite(enclosingIntRect(input));
+        }
+        region = WTF::move(inputs);
+    }
+    return region;
+}
+
+std::optional<Region> GraphicsLayerCoordinated::filterInputCoverage(const FloatRect& viewport) const
+{
+    Vector<const GraphicsLayerCoordinated*> filteredAncestors;
+    for (auto* layer = this; layer; layer = downcast<GraphicsLayerCoordinated>(layer->parent())) {
+        if (layer->m_filters.hasFilterOfType<FilterOperation::Type::Blur>() || layer->m_filters.hasFilterOfType<FilterOperation::Type::DropShadow>())
+            filteredAncestors.append(layer);
+    }
+    if (filteredAncestors.isEmpty())
+        return std::nullopt;
+
+    auto project = [](const Region& source, const TransformationMatrix& transform) {
+        Region result;
+        for (auto rect : source.rects())
+            result.unite(enclosingIntRect(transform.clampedBoundsOfProjectedQuad(FloatQuad(FloatRect(rect)))));
+        return result;
+    };
+    Region rootInput(enclosingIntRect(viewport));
+    for (size_t index = filteredAncestors.size(); index; --index) {
+        auto& layer = *filteredAncestors[index - 1];
+        if (!layer.m_layerTransform.cachedInverse)
+            return Region { };
+        auto input = reverseFilterInput(project(rootInput, *layer.m_layerTransform.cachedInverse), layer.m_filters);
+        auto next = project(input, layer.m_layerTransform.current.combined());
+        if (layer.m_layerTransform.cachedFutureInverse && layer.m_layerTransform.cachedFutureInverse != layer.m_layerTransform.cachedInverse) {
+            auto futureInput = reverseFilterInput(project(rootInput, *layer.m_layerTransform.cachedFutureInverse), layer.m_filters);
+            next.unite(project(futureInput, layer.m_layerTransform.future.combined()));
+        }
+        rootInput = WTF::move(next);
+    }
+    if (!m_layerTransform.cachedInverse)
+        return Region { };
+    auto input = project(rootInput, *m_layerTransform.cachedInverse);
+    if (m_layerTransform.cachedFutureInverse && m_layerTransform.cachedFutureInverse != m_layerTransform.cachedInverse)
+        input.unite(project(rootInput, *m_layerTransform.cachedFutureInverse));
+    return input;
+}
+#endif
+
 void GraphicsLayerCoordinated::updateVisibleRect(const FloatRect& rect)
 {
     assertIsHeld(m_platformLayer->lock());
     m_platformLayer->setVisibleRect(rect);
+#if PLATFORM(SCARLET)
+    m_platformLayer->setFilterInputCoverage(filterInputCoverage(rect));
+#endif
 
     // Non-invertible layers are not visible.
     if (!m_layerTransform.cachedInverse) {
