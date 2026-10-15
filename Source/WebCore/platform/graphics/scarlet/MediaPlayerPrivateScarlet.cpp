@@ -27,10 +27,34 @@
 #include <wtf/Scope.h>
 #include <wtf/TZoneMallocInlines.h>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
 #include <limits>
 #include <wtf/MonotonicTime.h>
 
 namespace WebCore {
+// Lifecycle points only: no frame-rate logging, URLs, source bytes, or tokens.
+static void profileMediaLifecycle(const char* stage, ScarletMediaSession* session,
+    MediaPlayer::NetworkState networkState, size_t stagedBytes, bool mediaSource,
+    bool inputFinished, bool endSubmitted, bool demuxEnded, int detail = 0)
+{
+    static const bool enabled = [] {
+        auto* value = std::getenv("SCARLET_WEBVIEW_PROFILE");
+        return value && value[0] == '1' && !value[1];
+    }();
+    if (!enabled)
+        return;
+    ScarletMediaStatus status { };
+    if (session)
+        scarlet_media_session_status(session, &status);
+    std::fprintf(stderr, "SCARLET_MEDIA_LIFECYCLE stage=%s session=%p network_state=%u detail=%d staged_bytes=%zu mse=%u input_eof=%u end_submitted=%u demux_ended=%u native_ready=%u native_paused=%u native_ended=%u native_error=%d time=%.6f duration=%.6f decoded=%llu\n",
+        stage, static_cast<void*>(session), static_cast<unsigned>(networkState), detail,
+        stagedBytes, static_cast<unsigned>(mediaSource), static_cast<unsigned>(inputFinished),
+        static_cast<unsigned>(endSubmitted), static_cast<unsigned>(demuxEnded),
+        status.ready_state, status.paused, status.ended, status.error,
+        status.current_time, status.duration, static_cast<unsigned long long>(status.decoded_frames));
+}
+
 class MediaPlayerFactoryScarlet final : public MediaPlayerFactory {
     WTF_MAKE_TZONE_ALLOCATED(MediaPlayerFactoryScarlet);
     WTF_OVERRIDE_DELETE_FOR_CHECKED_PTR(MediaPlayerFactoryScarlet);
@@ -189,6 +213,8 @@ void MediaPlayerPrivateScarlet::receiveData(const SharedBuffer& data)
 void MediaPlayerPrivateScarlet::finishLoading()
 {
     m_inputFinished = true;
+    profileMediaLifecycle("resource-eof", m_session, m_networkState, m_inputBytes,
+        false, m_inputFinished, m_endSubmitted, m_demuxEnded);
     if (m_resource)
         m_passedCors = m_resource->didPassAccessControlCheck();
     pumpInput();
@@ -263,6 +289,13 @@ void MediaPlayerPrivateScarlet::setNetworkState(MediaPlayer::NetworkState state)
 
 void MediaPlayerPrivateScarlet::fail(MediaPlayer::NetworkState state)
 {
+    bool mediaSource = false;
+#if ENABLE(MEDIA_SOURCE)
+    mediaSource = !!m_mediaSource;
+#endif
+    if (m_networkState != state)
+        profileMediaLifecycle("fail", m_session, m_networkState, m_inputBytes,
+            mediaSource, m_inputFinished, m_endSubmitted, m_demuxEnded, static_cast<int>(state));
     m_timer.stop();
     ++m_seekGeneration;
     m_seekTarget = MediaTime::invalidTime();
@@ -421,10 +454,15 @@ void MediaPlayerPrivateScarlet::pumpParser()
             m_packets.append(WTF::move(packet));
             updateBuffered();
         } else if (event.kind == SCARLET_MEDIA_PARSE_ERROR) {
+            if (m_networkState != MediaPlayer::NetworkState::DecodeError)
+                profileMediaLifecycle("parser-error", m_session, m_networkState, m_inputBytes,
+                    false, m_inputFinished, m_endSubmitted, m_demuxEnded, event.error);
             fail(MediaPlayer::NetworkState::DecodeError);
             return;
         } else if (event.kind == SCARLET_MEDIA_APPEND_DONE && m_endSubmitted && event.append_identifier == m_appendIdentifier) {
             m_demuxEnded = true;
+            profileMediaLifecycle("parser-eof", m_session, m_networkState, m_inputBytes,
+                false, m_inputFinished, m_endSubmitted, m_demuxEnded);
             for (auto& [identifier, track] : m_tracks)
                 endTrack(identifier);
             setNetworkState(MediaPlayer::NetworkState::Loaded);
@@ -883,12 +921,18 @@ void MediaPlayerPrivateScarlet::mediaSourceDurationChanged()
 }
 void MediaPlayerPrivateScarlet::mediaSourceEndOfStream(bool networkError, bool decodeError)
 {
+    // Detail: 0=normal EOS, 1=network error, 2=decode error.
+    auto detail = networkError ? 1 : decodeError ? 2 : 0;
+    profileMediaLifecycle("mse-eos-before", m_session, m_networkState, m_inputBytes,
+        true, m_inputFinished, m_endSubmitted, m_demuxEnded, detail);
     if (networkError)
         fail(MediaPlayer::NetworkState::NetworkError);
     else if (decodeError)
         fail(MediaPlayer::NetworkState::DecodeError);
     else
         setNetworkState(MediaPlayer::NetworkState::Loaded);
+    profileMediaLifecycle("mse-eos-after", m_session, m_networkState, m_inputBytes,
+        true, m_inputFinished, m_endSubmitted, m_demuxEnded, detail);
     wake();
 }
 void MediaPlayerPrivateScarlet::seekableRangesFromMediaSourceChanged()
