@@ -307,7 +307,7 @@ void MediaPlayerPrivateScarlet::releaseParserEvent()
 void MediaPlayerPrivateScarlet::cancelLoad()
 {
 #if USE(COORDINATED_GRAPHICS)
-    stopFramePump();
+    stopFramePump(false);
 #endif
     m_timer.stop();
     ++m_seekGeneration;
@@ -743,9 +743,22 @@ struct MediaPlayerPrivateScarlet::VideoFramePump {
         return result;
     }
 };
-void MediaPlayerPrivateScarlet::stopFramePump()
+void MediaPlayerPrivateScarlet::stopFramePump(bool preserveImage)
 {
     if (!m_framePump) return;
+    if (preserveImage) {
+        // A paused/reparented video must retain its last compositor frame,
+        // not the initial owner preview. This is a GPU-only immutable snapshot.
+        auto state = m_framePump->snapshot();
+        if (auto* context = PlatformDisplay::sharedDisplay().skiaGrContext()) {
+            if (auto image = m_framePump->snapshotForOwner(context->threadSafeProxy())) {
+                m_image = NativeImage::create(WTF::move(image), context);
+                m_videoFrameSerial = std::max(m_videoFrameSerial, state.serial);
+                m_snapshotVideoFrameSerial = m_videoFrameSerial;
+                m_frameMediaTime = state.mediaTime;
+            }
+        }
+    }
     auto pump = m_framePump.release();
     BinarySemaphore done;
     pump->runLoop->dispatch([pump, &done] {
@@ -944,7 +957,7 @@ RefPtr<CoordinatedPlatformLayerBufferProxy> MediaPlayerPrivateScarlet::platformL
 
 void MediaPlayerPrivateScarlet::clearCompositorFrame()
 {
-    stopFramePump();
+    stopFramePump(false);
     ++m_videoPresentationGeneration;
     m_pushedVideoFrameSerial = 0;
     if (m_contentsBufferProxy && m_contentsBufferProxy->isValid())

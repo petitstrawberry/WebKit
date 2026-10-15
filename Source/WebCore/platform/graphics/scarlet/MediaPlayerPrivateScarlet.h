@@ -109,7 +109,7 @@ private:
     void didPresentVideoFrame(uint64_t, double, const FloatSize&, MonotonicTime);
 #if USE(COORDINATED_GRAPHICS)
     struct VideoFramePump;
-    void stopFramePump();
+    void stopFramePump(bool preserveImage = true);
     std::unique_ptr<VideoFramePump> m_framePump;
     uint64_t m_snapshotVideoFrameSerial { 0 };
     uint64_t m_pumpPresentedCount { 0 };
