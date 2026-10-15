@@ -31,6 +31,7 @@
 #include <cstdlib>
 #include <limits>
 #include <wtf/MonotonicTime.h>
+#include <wtf/text/CString.h>
 
 namespace WebCore {
 // Lifecycle points only: no frame-rate logging, URLs, source bytes, or tokens.
@@ -47,12 +48,17 @@ static void profileMediaLifecycle(const char* stage, ScarletMediaSession* sessio
     ScarletMediaStatus status { };
     if (session)
         scarlet_media_session_status(session, &status);
-    std::fprintf(stderr, "SCARLET_MEDIA_LIFECYCLE stage=%s session=%p network_state=%u detail=%d staged_bytes=%zu mse=%u input_eof=%u end_submitted=%u demux_ended=%u native_ready=%u native_paused=%u native_ended=%u native_error=%d time=%.6f duration=%.6f decoded=%llu\n",
+    // Scarlet's standard printf family accepts integer/string conversions.
+    // Convert the actual doubles through WTF instead of truncating the log at
+    // an unsupported floating-point printf conversion.
+    auto time = String::number(status.current_time).utf8();
+    auto duration = String::number(status.duration).utf8();
+    std::fprintf(stderr, "SCARLET_MEDIA_LIFECYCLE stage=%s session=%p network_state=%u detail=%d staged_bytes=%zu mse=%u input_eof=%u end_submitted=%u demux_ended=%u native_ready=%u native_paused=%u native_ended=%u native_error=%d time=%s duration=%s decoded=%llu\n",
         stage, static_cast<void*>(session), static_cast<unsigned>(networkState), detail,
         stagedBytes, static_cast<unsigned>(mediaSource), static_cast<unsigned>(inputFinished),
         static_cast<unsigned>(endSubmitted), static_cast<unsigned>(demuxEnded),
         status.ready_state, status.paused, status.ended, status.error,
-        status.current_time, status.duration, static_cast<unsigned long long>(status.decoded_frames));
+        time.data(), duration.data(), static_cast<unsigned long long>(status.decoded_frames));
 }
 
 class MediaPlayerFactoryScarlet final : public MediaPlayerFactory {
