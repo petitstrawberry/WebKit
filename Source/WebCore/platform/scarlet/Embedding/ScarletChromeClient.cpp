@@ -49,6 +49,7 @@
 #endif
 #include "SearchPopupMenu.h"
 #include "TextIndicator.h"
+#include "WindowEventLoop.h"
 #include <cstdio>
 #include <cstdlib>
 #include <wtf/TZoneMallocInlines.h>
@@ -228,8 +229,19 @@ private:
     // No native scroll blit is attempted: the host repaints the actual WebCore
     // view at its updated scroll position on the next tick.
     void scroll(const IntSize&, const IntRect&, const IntRect&) final { repaint(__func__); }
-    void triggerRenderingUpdate() final { m_state.needsRenderingUpdate = true; }
-    bool scheduleRenderingUpdate() final { m_state.needsRenderingUpdate = true; return true; }
+    void triggerRenderingUpdate() final
+    {
+        m_state.needsRenderingUpdate = true;
+        // The embedding updates rendering immediately after its run-loop cycle,
+        // matching the standard coordinated renderer's observer boundary.
+        WindowEventLoop::breakToAllowRenderingUpdate();
+    }
+    bool scheduleRenderingUpdate() final
+    {
+        // Let Page's RenderingUpdateScheduler coalesce requests and select its
+        // display-refresh or timer fallback, including animation throttling.
+        return false;
+    }
     void setNeedsOneShotDrawingSynchronization() final { repaint(__func__); }
     void renderingUpdateFramesPerSecondChanged() final { m_state.needsRenderingUpdate = true; }
     void frameViewLayoutOrVisualViewportChanged(const LocalFrameView&) final

@@ -983,9 +983,13 @@ extern "C" int32_t scarlet_webview_create(const SWVConfiguration* configuration,
     pageConfiguration.storageNamespaceProvider->setSessionStorageQuota(5 * 1024 * 1024);
     pageConfiguration.editorClient = createScarletEditorClient();
 #if USE(COORDINATED_GRAPHICS)
-    view->layerTree = ScarletLayerTree::create([state = &view->loadState] {
-        // Composition-only changes do not invalidate DOM backing tiles.
-        state->needsRenderingUpdate = true;
+    view->layerTree = ScarletLayerTree::create([view = view.get()] {
+        // Composition-only frames stay on the retained tree. DOM layer changes
+        // use the same Page scheduler as script and layout rendering requests.
+        if (view->page)
+            view->page->scheduleRenderingUpdate();
+        else
+            view->loadState.needsRenderingUpdate = true;
     });
     if (!view->layerTree)
         return SWV_FAILED;
@@ -1252,7 +1256,9 @@ extern "C" int32_t scarlet_webview_tick(ScarletWebView* view)
 #if USE(COORDINATED_GRAPHICS)
     bool performedRenderingUpdate = false;
 #endif
-    if (view->loadState.needsRenderingUpdate || view->loadState.needsPaint || (frameView && frameView->needsLayout())) {
+    // Paint invalidation can reuse retained DOM state; it is not a request
+    // to run animation-frame callbacks ahead of Page's scheduled update.
+    if (view->loadState.needsRenderingUpdate || (frameView && frameView->needsLayout())) {
         // Clear before running callbacks: animation frames and observers may
         // request the next update while this one is being completed.
         view->loadState.needsRenderingUpdate = false;
