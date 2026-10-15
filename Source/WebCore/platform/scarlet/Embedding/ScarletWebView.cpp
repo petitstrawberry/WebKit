@@ -89,8 +89,13 @@
 #include <unordered_set>
 #include <vector>
 
-#if !PLATFORM(SCARLET) || !OS(SCARLET) || (!USE(CAIRO) && !USE(SKIA)) || !ENABLE(C_LOOP) || ENABLE(JIT)
-#error "ScarletWebView requires native Scarlet graphics and the C-loop JavaScript interpreter"
+#if !PLATFORM(SCARLET) || !OS(SCARLET) || (!USE(CAIRO) && !USE(SKIA)) || ENABLE(JIT)
+#error "ScarletWebView requires native Scarlet graphics and a non-JIT JavaScript interpreter"
+#endif
+// LowLevelInterpreter.cpp emits the generated assembly interpreter when C_LOOP
+// is disabled. Scarlet currently supports that interpreter on ARM64 ELF only.
+#if !ENABLE(C_LOOP) && !(CPU(ARM64) && CPU(ADDRESS64) && defined(__ELF__))
+#error "ScarletWebView assembly LLInt requires 64-bit ARM64 ELF"
 #endif
 extern "C" uint64_t scarlet_jsc_execution_entry_count();
 
