@@ -154,7 +154,15 @@ ScarletLayerTree::ScarletLayerTree(Function<void()>&& schedule)
         });
     };
 }
-ScarletLayerTree::~ScarletLayerTree() { detach(); }
+ScarletLayerTree::~ScarletLayerTree()
+{
+    detach();
+    // Page/media destruction has joined its display consumers. Retire Ganesh
+    // on its own run loop before the embedding destroys the Page-owner context.
+    // Promise image releases queued to that owner can then be drained by its
+    // normal shutdown cycle, rather than racing a later work-queue thread exit.
+    m_workQueue->dispatchSync([] { PlatformDisplay::destroySharedDisplay(); });
+}
 void ScarletLayerTree::assertIsOwner() const
 {
     RELEASE_ASSERT(isMainThread() && &RunLoop::currentSingleton() == &m_ownerRunLoop);
