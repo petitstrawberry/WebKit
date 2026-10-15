@@ -70,7 +70,8 @@
     || OS(HPUX)                \
     || OS(NETBSD)              \
     || OS(OPENBSD)             \
-    || OS(QNX)
+    || OS(QNX)                 \
+    || OS(SCARLET)
     // ELF platform
 #define HIDE_SYMBOL(name) ".hidden " #name
 #else
@@ -90,7 +91,8 @@
     || OS(HURD)                \
     || OS(NETBSD)              \
     || OS(QNX)                 \
-    || OS(WINDOWS)
+    || OS(WINDOWS)             \
+    || OS(SCARLET)
     // GNU as-compatible syntax.
 #define LOCAL_LABEL_STRING(name) ".L" #name
 #endif

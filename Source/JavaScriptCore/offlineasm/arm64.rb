@@ -1530,8 +1530,8 @@ class Instruction
             $asm.puts "ldr #{operands[1].arm64Operand(:quad)}, [#{operands[1].arm64Operand(:quad)}, #{operands[0].asmLabel}@GOTPAGEOFF]"
             $asm.putStr("#endif")
 
-            # On Linux, use ELF GOT relocation specifiers.
-            $asm.putStr("#elif OS(LINUX)")
+            # On Linux and Scarlet, use ELF GOT relocation specifiers.
+            $asm.putStr("#elif OS(LINUX) || OS(SCARLET)")
 
             $asm.puts "adrp #{operands[1].arm64Operand(:quad)}, :got:#{operands[0].asmLabel}"
             $asm.putStr("#if CPU(ADDRESS32)")

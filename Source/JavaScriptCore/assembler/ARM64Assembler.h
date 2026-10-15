@@ -4061,6 +4061,42 @@ public:
             linuxPageFlush(current, current + page);
 
         linuxPageFlush(current, end);
+#elif OS(SCARLET)
+        if (!size)
+            return;
+
+        const uint64_t start = reinterpret_cast<uintptr_t>(code);
+        RELEASE_ASSERT(size <= UINT64_MAX - start);
+        const uint64_t end = start + size;
+        uint64_t cacheType;
+        __asm__ volatile("mrs %0, ctr_el0" : "=r"(cacheType));
+
+        // Follow compiler-rt's AArch64 __clear_cache sequence. Scarlet permits
+        // EL0 CTR reads and cache maintenance (SCTLR_EL1.UCT/UCI).
+        // IDC means instruction/data coherence does not require a D-cache clean.
+        if (!(cacheType & (1ULL << 28))) {
+            const uint64_t lineBytes = 4ULL << ((cacheType >> 16) & 15);
+            for (uint64_t address = start & ~(lineBytes - 1); address < end;) {
+                __asm__ volatile("dc cvau, %0" : : "r"(address) : "memory");
+                // Avoid wrapping when the last cache line reaches the address limit.
+                if (end - address <= lineBytes)
+                    break;
+                address += lineBytes;
+            }
+        }
+        __asm__ volatile("dsb ish" : : : "memory");
+
+        // DIC means instruction/data coherence does not require I-cache invalidation.
+        if (!(cacheType & (1ULL << 29))) {
+            const uint64_t lineBytes = 4ULL << (cacheType & 15);
+            for (uint64_t address = start & ~(lineBytes - 1); address < end;) {
+                __asm__ volatile("ic ivau, %0" : : "r"(address) : "memory");
+                if (end - address <= lineBytes)
+                    break;
+                address += lineBytes;
+            }
+        }
+        __asm__ volatile("dsb ish\n\tisb" : : : "memory");
 #elif OS(WINDOWS)
         FlushInstructionCache(GetCurrentProcess(), code, size);
 #else
