@@ -624,6 +624,39 @@ bool SkiaCompositingLayer::computeTransformsAndAnimations(const TransformationMa
     return hasRunningAnimations;
 }
 
+void SkiaCompositingLayer::collectDamageForFrame(SkCanvas& canvas, Damage& frameDamage)
+{
+#if ENABLE(DAMAGE_TRACKING)
+        // Only the layer paint() is called on needs the table, so only the root ever allocates one.
+        if (!m_layerRectTracker)
+            lazyInitialize(m_layerRectTracker, makeUnique<LayerRectTracker>());
+        m_layerRectTracker->advanceToNextFrame();
+
+        PaintContext collectContext;
+        collectContext.collectState.emplace(frameDamage, *m_layerRectTracker);
+
+        // Sized like the canvas that will be drawn into, so both walks clip against the same device
+        // bounds. The layer's own size is in layer coordinates, which the root transform scales to the
+        // device by the device pixel ratio.
+        const auto canvasSize = canvas.getBaseLayerSize();
+        SkNoDrawCanvas noDrawCanvas(canvasSize.width(), canvasSize.height());
+        recursivePaint(noDrawCanvas, collectContext);
+
+        m_layerRectTracker->damageStaleLayerRectsAndAdvanceEntries(frameDamage);
+        resolveBackdropDamage(collectContext.collectState->backdropRectsInFrame, frameDamage);
+#else
+    UNUSED_PARAM(canvas);
+    UNUSED_PARAM(frameDamage);
+#endif
+}
+bool SkiaCompositingLayer::collectDamage(const IntSize& size, Damage& damage)
+{
+    bool animations = computeTransformsAndAnimations({ }, { }, MonotonicTime::now());
+    SkNoDrawCanvas canvas(size.width(), size.height());
+    collectDamageForFrame(canvas, damage);
+    return animations;
+}
+
 bool SkiaCompositingLayer::paint(SkCanvas& canvas, std::optional<Damage>& frameDamage, const std::optional<Damage>& priorTargetDamage, std::optional<SkColor> clearColor, Vector<Function<void(MonotonicTime)>>* presentationCallbacks, bool skipDrawIfUnchanged)
 {
 #if PLATFORM(SCARLET)
@@ -639,25 +672,8 @@ bool SkiaCompositingLayer::paint(SkCanvas& canvas, std::optional<Damage>& frameD
 #if ENABLE(DAMAGE_TRACKING)
     // Collect the damage in a walk of its own first, so it is complete before the walk that draws. Each
     // layer's damage stays until recursiveCleanUpAfterPaint() clears it at the end of the frame.
-    if (frameDamage) {
-        // Only the layer paint() is called on needs the table, so only the root ever allocates one.
-        if (!m_layerRectTracker)
-            lazyInitialize(m_layerRectTracker, makeUnique<LayerRectTracker>());
-        m_layerRectTracker->advanceToNextFrame();
-
-        PaintContext collectContext;
-        collectContext.collectState.emplace(*frameDamage, *m_layerRectTracker);
-
-        // Sized like the canvas that will be drawn into, so both walks clip against the same device
-        // bounds. The layer's own size is in layer coordinates, which the root transform scales to the
-        // device by the device pixel ratio.
-        const auto canvasSize = canvas.getBaseLayerSize();
-        SkNoDrawCanvas noDrawCanvas(canvasSize.width(), canvasSize.height());
-        recursivePaint(noDrawCanvas, collectContext);
-
-        m_layerRectTracker->damageStaleLayerRectsAndAdvanceEntries(*frameDamage);
-        resolveBackdropDamage(collectContext.collectState->backdropRectsInFrame, *frameDamage);
-    }
+    if (frameDamage)
+        collectDamageForFrame(canvas, *frameDamage);
 #else
     UNUSED_PARAM(frameDamage);
 #endif

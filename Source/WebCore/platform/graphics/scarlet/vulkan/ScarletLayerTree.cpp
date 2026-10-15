@@ -338,18 +338,18 @@ bool ScarletLayerTree::flush(LocalFrameView& frameView)
     m_output->notify();
     return true;
 }
-void ScarletLayerTree::commit()
+bool ScarletLayerTree::commit()
 {
     // A tile worker publishes complete recordings atomically. While it paints,
     // retain the previous scene and continue video/animation-only composition.
-    if (m_pendingTiles.load(std::memory_order_acquire)) return;
+    if (m_pendingTiles.load(std::memory_order_acquire)) return false;
     Vector<Ref<CoordinatedPlatformLayer>> layers, roots, removed;
     IntSize cssViewport, deviceViewport;
     float deviceScale;
     uint64_t epoch;
     {
         std::lock_guard lock(m_commitMutex);
-        if (!m_commitPending) return;
+        if (!m_commitPending) return false;
         { std::lock_guard outputLock(m_output->mutex); m_output->pending = true; }
         layers = WTF::move(m_pendingLayers);
         roots = WTF::move(m_pendingRoots);
@@ -387,6 +387,7 @@ void ScarletLayerTree::commit()
     scene.size = size;
     scene.scale = deviceScale;
     scene.epoch = epoch;
+    return true;
 }
 void ScarletLayerTree::render()
 {
@@ -426,7 +427,7 @@ void ScarletLayerTree::render()
         for (auto& callback : callbacks) callback(time);
     }
     bool required = m_compositionRequired.exchange(false);
-    commit();
+    required |= commit();
     if ((!required && !scene.animations) || scene.size.isEmpty()) return;
     auto now = MonotonicTime::now();
     if (now < m_nextFrame) {
@@ -449,7 +450,21 @@ void ScarletLayerTree::render()
             }
         }
     }
-    if (index == 2) { m_compositionRequired = true; return; }
+    if (index == 2) {
+        // Both images may be held by consumers. Inspect the scene without a
+        // render target; never wait for a lease just to discover a no-op.
+        Damage delta { scene.size };
+        scene.animations = scene.root->collectDamage(scene.size, delta);
+        if (!delta.isEmpty()) {
+            for (auto& slot : scene.slots)
+                if (slot.damage) slot.damage->add(delta);
+            m_compositionRequired = true;
+        } else {
+            std::lock_guard lock(m_output->mutex);
+            m_output->pending = false;
+        }
+        return;
+    }
     auto& target = scene.slots[index];
     if (!target.surface || target.size != scene.size) {
         target.surface = device->createSurface(scene.size.width(), scene.size.height());

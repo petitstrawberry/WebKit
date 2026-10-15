@@ -75,7 +75,7 @@ private:
     explicit ScarletLayerTree(Function<void()>&&);
     void assertIsOwner() const;
     void render();
-    void commit();
+    bool commit();
     void waitUntilPaintingComplete();
     Vector<Ref<CoordinatedPlatformLayer>> layersSnapshot() const;
     Ref<GraphicsLayer> createGraphicsLayer(GraphicsLayer::Type, GraphicsLayerClient&) override;

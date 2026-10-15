@@ -125,6 +125,9 @@ public:
     // it is collected first in a walk that draws nothing, before the walk that draws. The draw is limited
     // to the region the target must redraw - the target's prior owed damage combined with this frame's - and
     // no prior damage repaints the whole target. Returns whether any animation is still running.
+    // Collect retained-scene damage without touching an output image. Used
+    // when all output allocations are leased, so no-op commits can still drain.
+    bool collectDamage(const IntSize&, Damage&);
     bool paint(SkCanvas&, std::optional<Damage>& frameDamage, const std::optional<Damage>& priorTargetDamage = std::nullopt, std::optional<SkColor> clearColor = std::nullopt, Vector<Function<void(MonotonicTime)>>* presentationCallbacks = nullptr, bool skipDrawIfUnchanged = false);
 
 private:
@@ -230,6 +233,7 @@ private:
     void paintRepaintCounter(SkCanvas&, PaintContext&);
 #if ENABLE(DAMAGE_TRACKING)
     void collectFrameDamage(SkCanvas&, PaintContext&);
+    void collectDamageForFrame(SkCanvas&, Damage&);
     void collectBackdropDamage(SkCanvas&, PaintContext&);
     void collectGroupDamage(SkCanvas&, PaintContext&);
     void addGroupDamage(SkCanvas&, PaintContext&, const Vector<IntRect, 1>& overlapRects);
