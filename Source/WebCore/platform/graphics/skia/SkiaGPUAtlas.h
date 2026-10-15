@@ -112,6 +112,9 @@ public:
     BitmapTexture& atlasTexture() const { return m_atlasTexture.get(); }
 #endif
     sk_sp<SkImage> atlasImageForCurrentThread() const;
+#if PLATFORM(SCARLET)
+    bool canReplayOnWorker() const { return m_workerImage && m_workerImage != m_image; }
+#endif
 
 private:
 #if PLATFORM(SCARLET)
@@ -125,6 +128,7 @@ private:
 #if PLATFORM(SCARLET)
     sk_sp<SkSurface> m_surface;
     sk_sp<SkImage> m_image;
+    sk_sp<SkImage> m_workerImage;
 #else
     const Ref<BitmapTexture> m_atlasTexture;
     GrBackendTexture m_backendTexture;

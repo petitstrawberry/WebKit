@@ -11,6 +11,9 @@
 #include "IntSize.h"
 #include "SkiaCompositingLayer.h"
 #include <cstdint>
+#include <atomic>
+#include <wtf/Condition.h>
+#include <wtf/Lock.h>
 #include <memory>
 #include <wtf/Function.h>
 #include <wtf/HashSet.h>
@@ -49,6 +52,7 @@ private:
     explicit ScarletLayerTree(Function<void()>&&);
     void assertIsOwner() const;
     void updateSceneRoot();
+    void waitUntilPaintingComplete();
     Vector<Ref<CoordinatedPlatformLayer>> layersSnapshot() const;
 
     Ref<GraphicsLayer> createGraphicsLayer(GraphicsLayer::Type, GraphicsLayerClient&) override;
@@ -76,8 +80,10 @@ private:
     Vector<Function<void(MonotonicTime)>> m_presentationCallbacks;
     IntSize m_cssViewport;
     float m_deviceScale { 1 };
-    TilePaintStatistics m_tilePaintStatistics;
-    unsigned m_pendingTiles { 0 };
+    mutable Lock m_paintingLock;
+    Condition m_paintingCondition;
+    TilePaintStatistics m_tilePaintStatistics WTF_GUARDED_BY_LOCK(m_paintingLock);
+    std::atomic<unsigned> m_pendingTiles { 0 };
     bool m_compositionRequired { true };
     bool m_runningAnimations { false };
     bool m_detached { false };

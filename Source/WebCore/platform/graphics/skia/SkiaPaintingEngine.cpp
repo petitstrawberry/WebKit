@@ -92,10 +92,8 @@ SkiaPaintingEngine::SkiaPaintingEngine(sk_sp<GrContextThreadSafeProxy>&& threadS
     }
 #endif
 
-#if !PLATFORM(SCARLET)
     if (auto numberOfCPUThreads = numberOfCPUPaintingThreads())
         lazyInitialize(m_paintingWorkerPool, WorkerPool::create("SkiaCPUWorker"_s, numberOfCPUThreads));
-#endif
 }
 
 SkiaPaintingEngine::~SkiaPaintingEngine() = default;
@@ -290,6 +288,11 @@ Ref<CoordinatedTileBuffer> SkiaPaintingEngine::replay(const GraphicsLayerCoordin
     auto buffer = createBuffer(renderingMode, bufferSize, recording->contentsOpaque());
     buffer->beginPainting();
 
+#if PLATFORM(SCARLET)
+    bool replayOnOwner = recording->requiresOwnerThreadReplay();
+    for (const auto& atlas : recording->gpuAtlases())
+        replayOnOwner |= !atlas->canReplayOnWorker();
+#endif
     auto paintTile = [platformLayer = WTF::move(platformLayer), buffer = Ref { buffer }, tileRect, dirtyRect, recording = WTF::move(recording), threadSafeGrContext = m_threadSafeGrContext]() mutable {
         if (auto* canvas = buffer->canvas()) {
             auto replayPicture = [](const sk_sp<SkPicture>& picture, SkCanvas* canvas, const IntRect& recordRect, const IntRect& tileRect, const IntRect& dirtyRect, bool isDDLBuffer) {
@@ -337,8 +340,11 @@ Ref<CoordinatedTileBuffer> SkiaPaintingEngine::replay(const GraphicsLayerCoordin
 #endif
     };
 #if PLATFORM(SCARLET)
-    RELEASE_ASSERT(isMainThread() && buffer->isAccelerated());
-    paintTile();
+    RELEASE_ASSERT(isMainThread() && buffer->isAccelerated() && m_paintingWorkerPool);
+    if (replayOnOwner)
+        paintTile();
+    else
+        m_paintingWorkerPool->postTask(WTF::move(paintTile));
 #else
     m_paintingWorkerPool->postTask(WTF::move(paintTile));
 #endif

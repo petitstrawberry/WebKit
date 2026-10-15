@@ -3,9 +3,15 @@
 #include "GraphicsTypes.h"
 #include "NotImplemented.h"
 #include "PlatformDisplay.h"
+#include <wtf/MainThread.h>
+#include <wtf/RunLoop.h>
+#include <wtf/TZoneMallocInlines.h>
 #include <skia/core/SkImage.h>
 #include <skia/gpu/ganesh/SkImageGanesh.h>
 #include <skia/gpu/ganesh/SkSurfaceGanesh.h>
+#include <skia/private/chromium/GrPromiseImageTexture.h>
+#include <skia/private/chromium/SkImageChromium.h>
+#include <wtf/ThreadSafeWeakPtr.h>
 namespace WebCore::SkiaUtilities {
 sk_sp<SkImage> rewrapImageForContext(GrDirectContext* context, const SkImage& image)
 {
@@ -27,13 +33,57 @@ std::unique_ptr<SkiaGpuFence> flushAndSubmitWithFence(GrDirectContext* context)
 {
     context->flush(); context->submit(GrSyncCpu::kYes); return nullptr;
 }
+// Resolve producers on the owner before handing immutable promises to CPU-only
+// DDL recorders. Fulfillment uses that same owner/context and Vulkan stream.
+class NativePromiseImageContext {
+    WTF_MAKE_TZONE_ALLOCATED_INLINE(NativePromiseImageContext);
+public:
+    NativePromiseImageContext(const sk_sp<SkImage>& image, GrBackendTexture&& texture)
+        : m_image(image), m_texture(WTF::move(texture)), m_owner(RunLoop::currentSingleton()) { }
+    ~NativePromiseImageContext()
+    {
+        if (auto owner = m_owner.get(); owner && owner.get() != &RunLoop::currentSingleton()) {
+            // Never synchronously dispatch: the owner may be joining painting.
+            owner->dispatch([image = WTF::move(m_image)]() mutable { image = nullptr; });
+        }
+    }
+    sk_sp<GrPromiseImageTexture> fulfill()
+    {
+        RELEASE_ASSERT(isMainThread());
+        return GrPromiseImageTexture::Make(m_texture);
+    }
+private:
+    sk_sp<SkImage> m_image;
+    GrBackendTexture m_texture;
+    ThreadSafeWeakPtr<RunLoop> m_owner;
+};
+
 sk_sp<SkImage> createPromiseImageIfNeeded(const sk_sp<SkImage>& image, const sk_sp<GrContextThreadSafeProxy>& proxy)
 {
-    if (!image->isTextureBacked()) return image;
+    if (!image->isTextureBacked())
+        return image;
+    RELEASE_ASSERT(isMainThread());
     auto* context = PlatformDisplay::sharedDisplay().skiaGrContext();
-    if (!context || !proxy || !image->isValid(context->asRecorder()) || context->threadSafeProxy() != proxy) return nullptr;
-    return image;
+    if (!context || !proxy || !image->isValid(context->asRecorder()) || context->threadSafeProxy() != proxy)
+        return image;
+    GrBackendTexture texture;
+    GrSurfaceOrigin origin;
+    // Flush the producer proxy without submitting or waiting for the GPU. The
+    // later owner DrawDDL is encoded after these writes in the same stream.
+    if (!SkImages::GetBackendTextureFromImage(image.get(), &texture, true, &origin))
+        return image; // GraphicsContextSkia marks this as owner-only replay.
+    auto backendFormat = texture.getBackendFormat();
+    auto mipmapped = texture.mipmapped();
+    auto payload = makeUnique<NativePromiseImageContext>(image, WTF::move(texture));
+    auto promised = SkImages::PromiseTextureFrom(proxy, backendFormat, image->dimensions(), mipmapped,
+        origin, image->colorType(), image->alphaType(), image->refColorSpace(),
+        +[](void* opaque) -> sk_sp<GrPromiseImageTexture> { return static_cast<NativePromiseImageContext*>(opaque)->fulfill(); },
+        +[](void* opaque) { delete static_cast<NativePromiseImageContext*>(opaque); }, payload.release());
+    if (!promised)
+        return image;
+    return promised;
 }
+
 SkBlendMode toSkiaBlendMode(BlendMode blendMode, std::optional<CompositeOperator> operation)
 {
     switch (blendMode) {

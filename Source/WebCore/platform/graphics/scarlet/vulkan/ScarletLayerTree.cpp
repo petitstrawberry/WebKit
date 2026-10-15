@@ -109,6 +109,7 @@ void ScarletLayerTree::attachLayer(CoordinatedPlatformLayer& layer)
 void ScarletLayerTree::detachLayer(CoordinatedPlatformLayer& layer)
 {
     assertIsOwner();
+    waitUntilPaintingComplete();
     layer.invalidateTarget();
     m_layers.remove(layer);
     if (!m_detached)
@@ -158,20 +159,26 @@ void ScarletLayerTree::willPaintTile()
 }
 void ScarletLayerTree::didPaintTile()
 {
-    assertIsOwner();
-    RELEASE_ASSERT(m_pendingTiles);
-    --m_pendingTiles;
+    // Painting workers publish only completion. GPU/scene access stays owner-only.
+    Locker locker { m_paintingLock };
+    RELEASE_ASSERT(m_pendingTiles.load(std::memory_order_relaxed));
+    m_pendingTiles.fetch_sub(1, std::memory_order_release);
+    m_paintingCondition.notifyAll();
 }
 void ScarletLayerTree::didPaintTile(const IntRect& rect)
 {
-    didPaintTile();
+    Locker locker { m_paintingLock };
     ++m_tilePaintStatistics.paints;
     if (!rect.isEmpty())
         m_tilePaintStatistics.pixels += static_cast<uint64_t>(rect.width()) * rect.height();
+    RELEASE_ASSERT(m_pendingTiles.load(std::memory_order_relaxed));
+    m_pendingTiles.fetch_sub(1, std::memory_order_release);
+    m_paintingCondition.notifyAll();
 }
 ScarletLayerTree::TilePaintStatistics ScarletLayerTree::tilePaintStatistics() const
 {
     assertIsOwner();
+    Locker locker { m_paintingLock };
     return m_tilePaintStatistics;
 }
 void ScarletLayerTree::updateSceneRoot()
@@ -183,6 +190,20 @@ void ScarletLayerTree::updateSceneRoot()
         children.append(downcast<GraphicsLayerCoordinated>(*m_overlayLayer).coordinatedPlatformLayer().ensureTarget());
     m_sceneRoot->setChildren(WTF::move(children));
 }
+void ScarletLayerTree::waitUntilPaintingComplete()
+{
+    assertIsOwner();
+    // Use CoordinatedGraphics' existing per-buffer publication barrier before
+    // taking pending updates. The callback follows buffer completion, so join
+    // the pending counter too before releasing clients or asserting settled.
+    for (const auto& layer : layersSnapshot())
+        layer->waitUntilPaintingComplete();
+    Locker locker { m_paintingLock };
+    m_paintingCondition.wait(m_paintingLock, [this] {
+        return !m_pendingTiles.load(std::memory_order_acquire);
+    });
+}
+
 bool ScarletLayerTree::flush(LocalFrameView& frameView)
 {
     assertIsOwner();
@@ -194,6 +215,7 @@ bool ScarletLayerTree::flush(LocalFrameView& frameView)
     OptionSet<CompositionReason> reasons { CompositionReason::RenderingUpdate, CompositionReason::VideoFrame, CompositionReason::Animation };
     for (const auto& layer : layers)
         layer->flushPositionChanges(reasons);
+    waitUntilPaintingComplete();
     for (const auto& layer : layers)
         layer->flushCompositingState(reasons);
     for (const auto& layer : layers) {
@@ -255,6 +277,7 @@ void ScarletLayerTree::detach()
     assertIsOwner();
     if (std::exchange(m_detached, true))
         return;
+    waitUntilPaintingComplete();
     m_runningAnimations = false;
     m_compositionRequired = false;
     m_presentationCallbacks.clear();

@@ -1031,7 +1031,11 @@ void CoordinatedPlatformLayer::didPaintTile()
 
 void CoordinatedPlatformLayer::didPaintTile(const IntRect& rect)
 {
+#if !PLATFORM(SCARLET)
     assertIsMainThread();
+#endif
+    // Scarlet's client uses a completion barrier and synchronized statistics.
+    // It drains all painting callbacks before invalidating this client.
     if (m_client)
         m_client->didPaintTile(rect);
 }

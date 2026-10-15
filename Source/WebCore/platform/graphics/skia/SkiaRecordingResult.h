@@ -55,6 +55,9 @@ struct SkiaRecordingData {
 #endif
     Vector<Ref<SkiaImageAtlasLayout>> atlasLayouts;
     unsigned imageSetFingerprint { 0 };
+#if PLATFORM(SCARLET)
+    bool requiresOwnerThreadReplay { false };
+#endif
 };
 
 class SkiaRecordingResult final : public ThreadSafeRefCounted<SkiaRecordingResult, WTF::DestructionThread::Main> {
@@ -72,6 +75,9 @@ public:
     RenderingMode renderingMode() const { return m_renderingMode; }
     bool contentsOpaque() const { return m_contentsOpaque; }
     float contentsScale() const { return m_contentsScale; }
+#if PLATFORM(SCARLET)
+    bool requiresOwnerThreadReplay() const { return m_requiresOwnerThreadReplay; }
+#endif
 
     // Atlas layouts for batched raster image uploads.
     bool hasAtlasLayouts() const { return !m_atlasLayouts.isEmpty(); }
@@ -103,6 +109,9 @@ private:
 #endif
     Vector<Ref<SkiaImageAtlasLayout>> m_atlasLayouts;
     unsigned m_imageSetFingerprint { 0 };
+#if PLATFORM(SCARLET)
+    bool m_requiresOwnerThreadReplay { false };
+#endif
 #if USE(COORDINATED_GRAPHICS)
     Vector<Ref<SkiaGPUAtlas>> m_gpuAtlases;
 #endif

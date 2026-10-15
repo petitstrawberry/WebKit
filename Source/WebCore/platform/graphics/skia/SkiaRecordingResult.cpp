@@ -37,6 +37,9 @@ SkiaRecordingResult::SkiaRecordingResult(sk_sp<SkPicture>&& picture, SkiaRecordi
 #endif
     , m_atlasLayouts(WTF::move(recordingData.atlasLayouts))
     , m_imageSetFingerprint(recordingData.imageSetFingerprint)
+#if PLATFORM(SCARLET)
+    , m_requiresOwnerThreadReplay(recordingData.requiresOwnerThreadReplay)
+#endif
     , m_recordRect(recordRect)
     , m_renderingMode(renderingMode)
     , m_contentsOpaque(contentsOpaque)

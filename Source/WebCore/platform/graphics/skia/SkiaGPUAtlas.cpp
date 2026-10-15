@@ -31,6 +31,7 @@
 
 #include "PlatformDisplay.h"
 #include "SkiaImageAtlasLayout.h"
+#include "SkiaUtilities.h"
 #include <skia/core/SkCanvas.h>
 #include <skia/core/SkColorSpace.h>
 #include <skia/core/SkPaint.h>
@@ -79,6 +80,8 @@ void SkiaGPUAtlas::uploadImages()
         canvas->drawImage(entry.rasterImage, entry.atlasRect.x(), entry.atlasRect.y(), SkSamplingOptions(), &paint);
     m_image = m_surface->makeImageSnapshot();
     RELEASE_ASSERT(m_image && m_image->isTextureBacked());
+    m_workerImage = SkiaUtilities::createPromiseImageIfNeeded(m_image, m_threadSafeGrContext);
+    RELEASE_ASSERT(m_workerImage);
 }
 void SkiaGPUAtlas::waitForUpload() const
 {
@@ -87,10 +90,10 @@ void SkiaGPUAtlas::waitForUpload() const
 }
 sk_sp<SkImage> SkiaGPUAtlas::atlasImageForCurrentThread() const
 {
-    waitForUpload();
-    auto* context = PlatformDisplay::sharedDisplay().skiaGrContext();
-    RELEASE_ASSERT(context && context->threadSafeProxy() == m_threadSafeGrContext);
-    return m_image;
+    // Prepared once on the owner before publication to the painting workers.
+    // Workers copy only the immutable promise; fulfillment remains on owner.
+    RELEASE_ASSERT(m_workerImage && (isMainThread() || canReplayOnWorker()));
+    return m_workerImage;
 }
 } // namespace WebCore
 

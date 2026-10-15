@@ -270,6 +270,18 @@ sk_sp<SkImage> GraphicsContextSkia::imageForCurrentThread(const sk_sp<SkImage>& 
     return imageInThisThread->makeRasterImage(grContext);
 }
 
+sk_sp<SkImage> GraphicsContextSkia::imageForRecording(const sk_sp<SkImage>& image)
+{
+    auto result = SkiaUtilities::createPromiseImageIfNeeded(image, m_threadSafeGrContext);
+#if PLATFORM(SCARLET)
+    // Preserve all such images on the owner, including multi-plane GPU images
+    // that cannot be represented by the single-texture promise API. This flag
+    // accumulates across every draw/save/layer until endRecording().
+    m_requiresOwnerThreadReplay |= image->isTextureBacked() && result == image;
+#endif
+    return result;
+}
+
 void GraphicsContextSkia::drawNativeImage(const NativeImage& nativeImage, const FloatRect& destRect, const FloatRect& srcRect, ImagePaintingOptions options)
 {
     auto image = nativeImage.platformImage();
@@ -324,7 +336,7 @@ void GraphicsContextSkia::drawNativeImage(const NativeImage& nativeImage, const 
     trackAcceleratedRenderingFenceIfNeeded(imageInThisThread, nativeImage.grContext());
 #else
     if (m_threadSafeGrContext)
-        imageInThisThread = SkiaUtilities::createPromiseImageIfNeeded(imageInThisThread, m_threadSafeGrContext);
+        imageInThisThread = imageForRecording(imageInThisThread);
 #endif
 
     // 'imageForDrawing' references the incoming image (or if it's not directly accessible in this thread the 'imageInThisThread' which is).
@@ -608,6 +620,17 @@ SkPaint GraphicsContextSkia::createFillPaint() const
 void GraphicsContextSkia::setupFillSource(SkPaint& paint)
 {
     if (auto fillPattern = fillBrush().pattern()) {
+#if PLATFORM(SCARLET)
+        if (m_threadSafeGrContext) {
+            if (auto nativeImage = fillPattern->tileNativeImage()) {
+                auto image = nativeImage->platformImage();
+                // Pattern creates its shader internally; retain GPU-backed
+                // pattern recordings on the owner until that API carries its
+                // promise-failure metadata too. Raster patterns remain parallel.
+                m_requiresOwnerThreadReplay |= image && image->isTextureBacked();
+            }
+        }
+#endif
         paint.setShader(fillPattern->createPlatformPattern(toSkSamplingOptions(imageInterpolationQuality()), m_threadSafeGrContext));
         paint.setAlphaf(alpha());
 #if USE(TEXTURE_MAPPER)
@@ -636,6 +659,17 @@ SkPaint GraphicsContextSkia::createStrokePaint() const
 void GraphicsContextSkia::setupStrokeSource(SkPaint& paint)
 {
     if (auto strokePattern = strokeBrush().pattern()) {
+#if PLATFORM(SCARLET)
+        if (m_threadSafeGrContext) {
+            if (auto nativeImage = strokePattern->tileNativeImage()) {
+                auto image = nativeImage->platformImage();
+                // Pattern creates its shader internally; retain GPU-backed
+                // pattern recordings on the owner until that API carries its
+                // promise-failure metadata too. Raster patterns remain parallel.
+                m_requiresOwnerThreadReplay |= image && image->isTextureBacked();
+            }
+        }
+#endif
         paint.setShader(strokePattern->createPlatformPattern(toSkSamplingOptions(imageInterpolationQuality()), m_threadSafeGrContext));
 #if USE(TEXTURE_MAPPER)
         trackAcceleratedRenderingFenceIfNeeded(*strokePattern);
@@ -747,7 +781,7 @@ void GraphicsContextSkia::clipToImageBuffer(ImageBuffer& buffer, const FloatRect
         trackAcceleratedRenderingFenceIfNeeded(image, nativeImage->grContext());
 #else
         if (m_threadSafeGrContext)
-            image = SkiaUtilities::createPromiseImageIfNeeded(image, m_threadSafeGrContext);
+            image = imageForRecording(image);
 #endif
         auto shader = image->makeShader(SkTileMode::kDecal, SkTileMode::kDecal, { }, SkMatrix::Translate(SkFloatToScalar(destRect.x()), SkFloatToScalar(destRect.y())));
 
@@ -1177,7 +1211,7 @@ void GraphicsContextSkia::drawPattern(const NativeImage& nativeImage, const Floa
         trackAcceleratedRenderingFenceIfNeeded(image, nativeImage.grContext());
 #else
         if (m_threadSafeGrContext)
-            image = SkiaUtilities::createPromiseImageIfNeeded(image, m_threadSafeGrContext);
+            image = imageForRecording(image);
 #endif
         paint.setShader(image->makeShader(repeatX ? SkTileMode::kRepeat : SkTileMode::kClamp, repeatY ? SkTileMode::kRepeat : SkTileMode::kClamp, samplingOptions, &shaderMatrix));
     } else {
@@ -1195,7 +1229,7 @@ void GraphicsContextSkia::drawPattern(const NativeImage& nativeImage, const Floa
                 trackAcceleratedRenderingFenceIfNeeded(tileImage, grContext);
 #else
                 if (m_threadSafeGrContext)
-                    tileImage = SkiaUtilities::createPromiseImageIfNeeded(tileImage, m_threadSafeGrContext);
+                    tileImage = imageForRecording(tileImage);
 #endif
                 paint.setShader(tileImage->makeShader(SkTileMode::kRepeat, SkTileMode::kRepeat, samplingOptions, &shaderMatrix));
             }
@@ -1218,6 +1252,9 @@ void GraphicsContextSkia::drawPattern(const NativeImage& nativeImage, const Floa
 void GraphicsContextSkia::beginRecording(RecordingMode recordingMode, const sk_sp<GrContextThreadSafeProxy>& threadSafeGrContext)
 {
     ASSERT(m_contextMode == ContextMode::PaintingMode);
+#if PLATFORM(SCARLET)
+    m_requiresOwnerThreadReplay = false;
+#endif
     switch (recordingMode) {
     case RecordingMode::Tile:
         m_contextMode = ContextMode::TileRecordingMode;
@@ -1267,7 +1304,11 @@ SkiaRecordingData GraphicsContextSkia::endRecording()
             ASSERT(m_threadSafeGrContext);
             m_threadSafeGrContext = nullptr;
         }
-        return { WTF::move(atlasLayouts), imageSetFingerprint };
+        return { WTF::move(atlasLayouts), imageSetFingerprint
+#if PLATFORM(SCARLET)
+            , std::exchange(m_requiresOwnerThreadReplay, false)
+#endif
+        };
 #endif
     }
     case ContextMode::CanvasRecordingMode:

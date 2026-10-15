@@ -137,6 +137,7 @@ private:
     void trackAcceleratedRenderingFenceIfNeeded(Pattern&);
 #endif
     sk_sp<SkImage> imageForCurrentThread(const sk_sp<SkImage>&) const;
+    sk_sp<SkImage> imageForRecording(const sk_sp<SkImage>&);
 
     void setupFillSource(SkPaint&);
     void setupStrokeSource(SkPaint&);
@@ -202,6 +203,9 @@ private:
     SkiaState m_skiaState;
     Vector<SkiaState, 1> m_skiaStateStack;
     sk_sp<GrContextThreadSafeProxy> m_threadSafeGrContext;
+#if PLATFORM(SCARLET)
+    bool m_requiresOwnerThreadReplay { false };
+#endif
 #if USE(TEXTURE_MAPPER)
     SkiaImageToFenceMap m_imageToFenceMap;
 #endif
