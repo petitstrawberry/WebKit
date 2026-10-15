@@ -58,7 +58,87 @@ static void profileMediaLifecycle(const char* stage, ScarletMediaSession* sessio
         stagedBytes, static_cast<unsigned>(mediaSource), static_cast<unsigned>(inputFinished),
         static_cast<unsigned>(endSubmitted), static_cast<unsigned>(demuxEnded),
         status.ready_state, status.paused, status.ended, status.error,
-        time.data(), duration.data(), static_cast<unsigned long long>(status.decoded_frames));
+        reinterpret_cast<const char*>(time.data()), reinterpret_cast<const char*>(duration.data()), static_cast<unsigned long long>(status.decoded_frames));
+}
+
+// Aggregate diagnostics for polls on this owner. No player lifetime state,
+// public engine layout changes, or clock reads when profiling is disabled.
+enum class MediaPollPhase : unsigned {
+    Poll, Input, Parser, Status, Acquire, Upload, Replace, Push, Release, Notify, Count
+};
+struct MediaPollProfile {
+    struct Counter { uint64_t calls { 0 }, micros { 0 }, maximum { 0 }; };
+    Counter counters[static_cast<unsigned>(MediaPollPhase::Count)];
+    MonotonicTime since { MonotonicTime::now() };
+};
+static bool mediaPollProfilingEnabled()
+{
+    static const bool enabled = [] {
+        auto* value = std::getenv("SCARLET_WEBVIEW_PROFILE");
+        return value && value[0] == '1' && !value[1];
+    }();
+    return enabled;
+}
+static MediaPollProfile* mediaPollProfile()
+{
+    if (!mediaPollProfilingEnabled())
+        return nullptr;
+    static thread_local MediaPollProfile profile;
+    return &profile;
+}
+static void addMediaProfileCounter(uint64_t& counter, uint64_t amount)
+{
+    counter += std::min(amount, std::numeric_limits<uint64_t>::max() - counter);
+}
+class MediaPollPhaseScope {
+public:
+    MediaPollPhaseScope(MediaPollProfile* profile, MediaPollPhase phase)
+        : m_profile(profile), m_phase(phase)
+    {
+        if (m_profile)
+            m_start = MonotonicTime::now();
+    }
+    ~MediaPollPhaseScope()
+    {
+        if (!m_profile)
+            return;
+        auto elapsed = (MonotonicTime::now() - m_start).microseconds();
+        auto micros = elapsed >= static_cast<double>(std::numeric_limits<uint64_t>::max()) ? std::numeric_limits<uint64_t>::max() : elapsed > 0 ? static_cast<uint64_t>(elapsed) : 0;
+        auto& counter = m_profile->counters[static_cast<unsigned>(m_phase)];
+        addMediaProfileCounter(counter.calls, 1);
+        addMediaProfileCounter(counter.micros, micros);
+        counter.maximum = std::max(counter.maximum, micros);
+    }
+private:
+    MediaPollProfile* m_profile;
+    MediaPollPhase m_phase;
+    MonotonicTime m_start;
+};
+template<typename Function>
+static decltype(auto) profileMediaPollPhase(MediaPollProfile* profile, MediaPollPhase phase, Function&& function)
+{
+    MediaPollPhaseScope scope(profile, phase);
+    return function();
+}
+static void reportMediaPollProfile(MediaPollProfile& profile)
+{
+    auto now = MonotonicTime::now();
+    auto elapsed = (now - profile.since).microseconds();
+    if (elapsed < 1000000)
+        return;
+    auto value = [&](MediaPollPhase phase) { return static_cast<unsigned long long>(profile.counters[static_cast<unsigned>(phase)].micros); };
+    const auto& total = profile.counters[static_cast<unsigned>(MediaPollPhase::Poll)];
+    const auto& acquire = profile.counters[static_cast<unsigned>(MediaPollPhase::Acquire)];
+    const auto& upload = profile.counters[static_cast<unsigned>(MediaPollPhase::Upload)];
+    std::fprintf(stderr, "SCARLET_MEDIA_POLL_PROFILE scope=owner-polls period_us=%llu polls=%llu poll_us=%llu max_poll_us=%llu input_us=%llu parser_us=%llu status_us=%llu acquire_calls=%llu acquire_us=%llu upload_calls=%llu upload_us=%llu replace_us=%llu push_us=%llu release_us=%llu notify_us=%llu\n",
+        static_cast<unsigned long long>(elapsed),
+        static_cast<unsigned long long>(total.calls), static_cast<unsigned long long>(total.micros), static_cast<unsigned long long>(total.maximum),
+        value(MediaPollPhase::Input), value(MediaPollPhase::Parser), value(MediaPollPhase::Status),
+        static_cast<unsigned long long>(acquire.calls), value(MediaPollPhase::Acquire),
+        static_cast<unsigned long long>(upload.calls), value(MediaPollPhase::Upload),
+        value(MediaPollPhase::Replace), value(MediaPollPhase::Push), value(MediaPollPhase::Release), value(MediaPollPhase::Notify));
+    profile = { };
+    profile.since = now;
 }
 
 class MediaPlayerFactoryScarlet final : public MediaPlayerFactory {
@@ -498,14 +578,20 @@ void MediaPlayerPrivateScarlet::wake()
 void MediaPlayerPrivateScarlet::poll()
 {
     Ref protectedThis { *this };
-    pumpInput();
-    pumpParser();
-    updateStatus();
-    updateFrame();
+    auto* profile = mediaPollProfile();
+    {
+        MediaPollPhaseScope pollScope(profile, MediaPollPhase::Poll);
+        profileMediaPollPhase(profile, MediaPollPhase::Input, [&] { pumpInput(); });
+        profileMediaPollPhase(profile, MediaPollPhase::Parser, [&] { pumpParser(); });
+        profileMediaPollPhase(profile, MediaPollPhase::Status, [&] { updateStatus(); });
+        updateFrame();
 #if ENABLE(MEDIA_SOURCE)
-    if (m_mediaSource)
-        m_mediaSource->notifyDecodersReady();
+        if (m_mediaSource)
+            profileMediaPollPhase(profile, MediaPollPhase::Notify, [&] { m_mediaSource->notifyDecodersReady(); });
 #endif
+    }
+    if (profile)
+        reportMediaPollProfile(*profile);
     if (m_session && m_networkState != MediaPlayer::NetworkState::DecodeError && m_networkState != MediaPlayer::NetworkState::NetworkError
         && (!m_status.paused || m_networkState == MediaPlayer::NetworkState::Loading || m_seekPromise || !m_replay.isEmpty()))
         m_timer.startOneShot(Seconds { 1.0 / 60 });
@@ -554,10 +640,11 @@ void MediaPlayerPrivateScarlet::updateFrame()
 {
     if (!m_session)
         return;
+    auto* profile = mediaPollProfile();
     ScarletMediaFrame frame { };
-    if (scarlet_media_session_acquire_frame(m_session, &frame) <= 0)
+    if (profileMediaPollPhase(profile, MediaPollPhase::Acquire, [&] { return scarlet_media_session_acquire_frame(m_session, &frame); }) <= 0)
         return;
-    auto release = makeScopeExit([&] { scarlet_media_session_release_frame(m_session, frame.lease); });
+    auto release = makeScopeExit([&] { profileMediaPollPhase(profile, MediaPollPhase::Release, [&] { scarlet_media_session_release_frame(m_session, frame.lease); }); });
     if (!frame.width || !frame.height || frame.width > 16384 || frame.height > 16384
         || (frame.format != SCARLET_MEDIA_I420 && frame.format != SCARLET_MEDIA_NV12) || !prepareSkiaContext()) {
         fail(MediaPlayer::NetworkState::DecodeError);
@@ -581,12 +668,12 @@ void MediaPlayerPrivateScarlet::updateFrame()
         planes[i].reset(imageInfo, frame.planes[i], frame.strides[i]);
     }
     auto pixmaps = SkYUVAPixmaps::FromExternalPixmaps(info, planes);
-    auto image = SkImages::TextureFromYUVAPixmaps(context, pixmaps, skgpu::Mipmapped::kNo, false, SkColorSpace::MakeSRGB());
+    auto image = profileMediaPollPhase(profile, MediaPollPhase::Upload, [&] { return SkImages::TextureFromYUVAPixmaps(context, pixmaps, skgpu::Mipmapped::kNo, false, SkColorSpace::MakeSRGB()); });
     if (!image) {
         fail(MediaPlayer::NetworkState::DecodeError);
         return;
     }
-    m_image = NativeImage::create(WTF::move(image), context);
+    profileMediaPollPhase(profile, MediaPollPhase::Replace, [&] { m_image = NativeImage::create(WTF::move(image), context); });
     ++m_videoFrameSerial;
     m_frameMediaTime = frame.presentation_us / 1000000.0;
     auto size = FloatSize { static_cast<float>(frame.width), static_cast<float>(frame.height) };
@@ -601,7 +688,7 @@ void MediaPlayerPrivateScarlet::updateFrame()
         }
         if (m_visible) {
 #if USE(COORDINATED_GRAPHICS)
-            if (!pushFrameToCompositor())
+            if (!profileMediaPollPhase(profile, MediaPollPhase::Push, [&] { return pushFrameToCompositor(); }))
 #endif
                 player->repaint();
         }
