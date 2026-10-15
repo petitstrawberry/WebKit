@@ -20,6 +20,11 @@
 #include "config.h"
 #include "Page.h"
 
+#if PLATFORM(SCARLET)
+#include <cstdio>
+#include <cstdlib>
+#endif
+
 #include "AXIsolatedTree.h"
 #include "AXLogger.h"
 #include "AXObjectCacheInlines.h"
@@ -2267,8 +2272,45 @@ void Page::removeActivityStateChangeObserver(ActivityStateChangeObserver& observ
     m_activityStateChangeObservers.remove(observer);
 }
 
+#if PLATFORM(SCARLET)
+// Opt-in attribution of long rendering turns. Disabled profiling performs no
+// clock reads, and the standard rendering order is unchanged.
+class ScarletRenderingUpdateProfile {
+public:
+    ScarletRenderingUpdateProfile(const char* phase, uint64_t step = 0)
+        : m_phase(phase)
+        , m_step(step)
+    {
+        static const bool enabled = [] {
+            const char* value = std::getenv("SCARLET_WEBVIEW_PROFILE");
+            return value && value[0] && value[0] != '0';
+        }();
+        if (enabled)
+            m_started = MonotonicTime::now();
+    }
+
+    ~ScarletRenderingUpdateProfile()
+    {
+        if (!m_started)
+            return;
+        auto elapsed = MonotonicTime::now() - m_started;
+        if (elapsed >= 8_ms)
+            std::fprintf(stderr, "SCARLET_RENDERING_STEP phase=%s step=%llu elapsed_us=%.0f\n",
+                m_phase, static_cast<unsigned long long>(m_step), elapsed.microseconds());
+    }
+
+private:
+    const char* m_phase;
+    uint64_t m_step;
+    MonotonicTime m_started;
+};
+#endif
+
 void Page::layoutIfNeeded(OptionSet<LayoutOptions> layoutOptions)
 {
+#if PLATFORM(SCARLET)
+    ScarletRenderingUpdateProfile profile("layout");
+#endif
     for (auto& rootFrame : m_rootFrames) {
         ASSERT(rootFrame->isRootFrame());
         RefPtr view = rootFrame->view();
@@ -2490,6 +2532,9 @@ void Page::updateRendering()
     layoutIfNeeded();
 
     auto runProcessingStep = [&](RenderingUpdateStep step, NOESCAPE const Function<void(Document&)>& perDocumentFunction) {
+#if PLATFORM(SCARLET)
+        ScarletRenderingUpdateProfile profile("document", static_cast<uint64_t>(step));
+#endif
         m_renderingUpdateRemainingSteps.last().remove(step);
         forEachRenderableDocument(perDocumentFunction);
     };
@@ -2654,6 +2699,9 @@ void Page::doAfterUpdateRendering()
     // layout to be up-to-date. It should not run script, trigger layout, or dirty layout.
 
     auto runProcessingStep = [&](RenderingUpdateStep step, NOESCAPE const Function<void(Document&)>& perDocumentFunction) {
+#if PLATFORM(SCARLET)
+        ScarletRenderingUpdateProfile profile("document", static_cast<uint64_t>(step));
+#endif
         m_renderingUpdateRemainingSteps.last().remove(step);
         forEachRenderableDocument(perDocumentFunction);
     };
