@@ -28,6 +28,9 @@ struct ScarletGCRegisters {
 
 unsigned long scarlet_native_call(unsigned long, unsigned long, unsigned long, unsigned long, unsigned long, unsigned long);
 int scarlet_gc_register_current(void);
+// The exiting thread calls this only after leaving WTF ThreadGroups and while
+// holding ThreadSuspendLocker. This excludes scanners and protects raw records.
+int scarlet_gc_unregister_current(void);
 int scarlet_gc_suspend(pthread_t, struct ScarletGCRegisters**);
 int scarlet_gc_resume(pthread_t);
 int scarlet_gc_stack_bounds(void**, void**);

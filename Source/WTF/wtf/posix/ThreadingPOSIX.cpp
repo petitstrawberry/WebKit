@@ -593,6 +593,13 @@ auto Thread::suspend(const ThreadSuspendLocker&) -> std::expected<void, Platform
         return makeUnexpected(result);
     return { };
 #elif OS(SCARLET)
+    {
+        // A retained Thread may outlive its pthread_t. Do not let a reused
+        // POSIX handle resolve to a new thread's native registry record.
+        Locker locker { m_mutex };
+        if (hasExited())
+            return makeUnexpected(ESRCH);
+    }
     if (!m_suspendCount) {
         int result = scarlet_gc_suspend(m_handle, &m_platformRegisters);
         if (result) return makeUnexpected(result);
@@ -784,6 +791,14 @@ void Thread::destructTLS(void* data)
 
     if (thread->m_isDestroyedOnce) {
         thread->didExit();
+#if OS(SCARLET)
+        {
+            // didExit() has removed every ThreadGroup membership and released
+            // their locks. Exclude active scanners before recycling the record.
+            ThreadSuspendLocker locker;
+            RELEASE_ASSERT(!scarlet_gc_unregister_current());
+        }
+#endif
         thread->deref();
         return;
     }

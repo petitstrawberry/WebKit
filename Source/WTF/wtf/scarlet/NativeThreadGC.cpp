@@ -6,9 +6,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-// This fixed registry bounds the native runtime to 256 registered threads.
-// Stable records are never recycled while an asynchronous event can hold one.
-// Exhaustion is reported; no missed or partial snapshot is accepted.
+// Bound concurrent registrations, not the lifetime number of created threads.
+// A slot is retired by its own exiting thread only after it has left the WTF
+// ThreadGroups and while holding ThreadSuspendLocker. A scanner's record and
+// saved-register pointers therefore remain stable through suspend and resume.
 struct Record {
     std::atomic<unsigned long> id { 0 };
     unsigned long tid { };
@@ -65,6 +66,30 @@ extern "C" int scarlet_gc_register_current()
     }
     free->tid = call(7);
     free->id.store(id, std::memory_order_release);
+    pthread_mutex_unlock(&registry_mutex);
+    return 0;
+}
+
+extern "C" int scarlet_gc_unregister_current()
+{
+    // The caller holds WTF's global ThreadSuspendLocker. Never take that lock
+    // while still holding a ThreadGroup lock: didExit() must have finished first.
+    pthread_mutex_lock(&registry_mutex);
+    auto r = lookup(pthread_self());
+    if (!r) {
+        pthread_mutex_unlock(&registry_mutex);
+        return ESRCH;
+    }
+    if (r->state.load(std::memory_order_acquire)) {
+        pthread_mutex_unlock(&registry_mutex);
+        return EBUSY;
+    }
+    // resume() acknowledged the delivered event before returning to state 0;
+    // this target cannot reach its TLS destructor until the handler has returned.
+    Record* expected = r;
+    request.compare_exchange_strong(expected, nullptr, std::memory_order_acq_rel);
+    r->tid = 0;
+    r->id.store(0, std::memory_order_release);
     pthread_mutex_unlock(&registry_mutex);
     return 0;
 }
