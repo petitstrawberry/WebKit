@@ -725,7 +725,12 @@ private:
             response.setTextEncodingName(extractCharsetFromMediaType(contentType).toString());
         }
         if (data.streaming) {
-            auto length = utf8(response.httpHeaderField(HTTPHeaderName::ContentLength).stripWhiteSpace());
+            auto value = utf8(response.httpHeaderField(HTTPHeaderName::ContentLength));
+            std::string_view length { value };
+            while (!length.empty() && (length.front() == ' ' || length.front() == '\t'))
+                length.remove_prefix(1);
+            while (!length.empty() && (length.back() == ' ' || length.back() == '\t'))
+                length.remove_suffix(1);
             int64_t expected = -1;
             auto parsed = std::from_chars(length.data(), length.data() + length.size(), expected);
             if (parsed.ec == std::errc { } && parsed.ptr == length.data() + length.size() && expected >= 0)
