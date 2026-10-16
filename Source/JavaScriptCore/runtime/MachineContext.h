@@ -51,7 +51,7 @@ template<typename T = void*> inline T framePointer(const PlatformRegisters& regs
 
 inline std::optional<CodePtr<PlatformRegistersPCPtrTag>> instructionPointer(const PlatformRegisters& regs)
 {
-    return CodePtr<PlatformRegistersPCPtrTag>(std::bit_cast<void*>(regs.pc));
+    return std::make_optional(CodePtr<PlatformRegistersPCPtrTag>(std::bit_cast<void*>(regs.pc)));
 }
 
 inline void setInstructionPointer(PlatformRegisters& regs, void* value)
