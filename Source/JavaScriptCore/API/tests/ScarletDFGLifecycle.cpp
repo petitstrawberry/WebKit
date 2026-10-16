@@ -1,5 +1,5 @@
 // Standalone native Scarlet JSC regression. Link against the normal JSC/WTF
-// closure; run once with JSC_useDFGJIT=false and once with it true.
+// closure; select Baseline/DFG/FTL with JSC_useDFGJIT and JSC_useFTLJIT.
 // The restricted $vm helpers are enabled only in this test process.
 #include "config.h"
 #include "APICast.h"
@@ -9,6 +9,7 @@
 #include "JSCConfig.h"
 #include "JSGlobalObject.h"
 #include "JSLock.h"
+#include "MachineContext.h"
 #include "JavaScript.h"
 #include "Options.h"
 #include "VM.h"
@@ -22,6 +23,8 @@
 using Clock = std::chrono::steady_clock;
 static std::atomic<bool> observedTier { false };
 static bool expectDFG;
+static bool expectFTL;
+static const char* tierName() { return expectFTL ? "FTL" : expectDFG ? "DFG" : "Baseline"; }
 
 static bool evaluate(JSGlobalContextRef context, const char* source, bool& result)
 {
@@ -57,11 +60,12 @@ static bool semantics(JSGlobalContextRef context)
 {
     if (!require(context, R"JS(
         globalThis.expectedDFG = EXPECT_DFG;
+        globalThis.expectedFTL = EXPECT_FTL;
         globalThis.tierSeen = false;
         globalThis.proto = { value: 7 };
         globalThis.receiver = Object.create(proto);
         function hot(value) {
-            if (expectedDFG ? $vm.dfgTrue() : $vm.baselineJITTrue())
+            if (expectedFTL ? $vm.ftlTrue() : expectedDFG ? $vm.dfgTrue() : $vm.baselineJITTrue())
                 tierSeen = true;
             return receiver.value + value;
         }
@@ -80,7 +84,7 @@ static bool semantics(JSGlobalContextRef context)
         sched_yield();
     } while (!seen && Clock::now() < deadline);
     if (!seen) {
-        std::fprintf(stderr, "SCARLET_DFG_FAIL stage=actual-tier expected=%s\n", expectDFG ? "DFG" : "Baseline");
+        std::fprintf(stderr, "SCARLET_DFG_FAIL stage=actual-tier expected=%s\n", tierName());
         return false;
     }
     if (!require(context, R"JS(
@@ -101,7 +105,7 @@ static bool semantics(JSGlobalContextRef context)
         if(!caught) throw Error('optimized exception');
         globalThis.regexTierSeen = false;
         function regexHot(value) {
-            if(expectedDFG ? $vm.dfgTrue() : $vm.baselineJITTrue()) regexTierSeen=true;
+            if(expectedFTL ? $vm.ftlTrue() : expectedDFG ? $vm.dfgTrue() : $vm.baselineJITTrue()) regexTierSeen=true;
             return /(?:ab)+cd/.test(value);
         }
         $vm.noInline(regexHot);
@@ -115,10 +119,10 @@ static bool semantics(JSGlobalContextRef context)
         globalThis.gcAfterTierSeen = false;
         function acrossGC(n, collect) {
             const object = { value:n, data:new Uint8Array([3,5,7]) };
-            const before = expectedDFG ? $vm.dfgTrue() : $vm.baselineJITTrue();
+            const before = expectedFTL ? $vm.ftlTrue() : expectedDFG ? $vm.dfgTrue() : $vm.baselineJITTrue();
             if(before) gcTierSeen=true;
             if(collect) $vm.gc();
-            const after = expectedDFG ? $vm.dfgTrue() : $vm.baselineJITTrue();
+            const after = expectedFTL ? $vm.ftlTrue() : expectedDFG ? $vm.dfgTrue() : $vm.baselineJITTrue();
             if(collect && before && after) gcAfterTierSeen=true;
             return object.value===n && object.data[1]===5;
         }
@@ -154,13 +158,13 @@ static bool semantics(JSGlobalContextRef context)
             "for(let n=0;n<32;++n) if(!acrossGC(n,true)) throw Error('GC root'); gcAfterTierSeen;",
             "full-gc-roots"))
         return false;
-    std::printf("SCARLET_DFG_PASS stage=semantics tier=%s type-exit prototype-watchpoint exception full-gc32\n", expectDFG ? "DFG" : "Baseline");
+    std::printf("SCARLET_DFG_PASS stage=semantics tier=%s type-exit prototype-watchpoint exception full-gc32\n", tierName());
     return true;
 }
 
 static JSValueRef tierReached(JSContextRef context, JSObjectRef, JSObjectRef, size_t count, const JSValueRef values[], JSValueRef*)
 {
-    if (count == 2 && JSValueToBoolean(context, values[expectDFG ? 0 : 1]))
+    if (count == 3 && JSValueToBoolean(context, values[expectFTL ? 0 : expectDFG ? 1 : 2]))
         observedTier.store(true, std::memory_order_release);
     return JSValueMakeUndefined(context);
 }
@@ -213,7 +217,7 @@ static bool interruptLoop(JSGlobalContextRef context)
     }
     auto script = JSStringCreateWithUTF8CString(R"JS(
         function infiniteDFG() {
-            for(;;) nativeTierReached($vm.dfgTrue(), $vm.baselineJITTrue());
+            for(;;) nativeTierReached($vm.ftlTrue(), $vm.dfgTrue(), $vm.baselineJITTrue());
         }
         $vm.noInline(infiniteDFG);
         infiniteDFG();
@@ -235,7 +239,7 @@ static bool interruptLoop(JSGlobalContextRef context)
         && !interrupt.timedOut.load(std::memory_order_acquire) && !result
         && exception && toJS(toJS(context), exception) == toJS(toJS(context), termination);
     std::printf("SCARLET_DFG_%s stage=infinite-interrupt tier=%s observed=%u timeout=%u exception=%u\n",
-        passed ? "PASS" : "FAIL", expectDFG ? "DFG" : "Baseline",
+        passed ? "PASS" : "FAIL", tierName(),
         observedTier.load(), interrupt.timedOut.load(), !!exception);
     return passed;
 }
@@ -243,15 +247,24 @@ static bool interruptLoop(JSGlobalContextRef context)
 int main()
 {
     static_assert(ENABLE_DFG_JIT, "Build this regression against the normal DFG-enabled native JSC");
-    static_assert(!ENABLE_FTL_JIT && !ENABLE_WEBASSEMBLY && ENABLE_YARR_JIT);
+    static_assert(ENABLE_YARR_JIT);
+    PlatformRegisters registers { };
+    registers.gpr[29] = 0x1000;
+    registers.gpr[4] = 0x2000;
+    registers.pc = 0x3000;
+    if (JSC::MachineContext::framePointer<uintptr_t>(registers) != 0x1000
+        || std::bit_cast<uintptr_t>(JSC::MachineContext::llintInstructionPointer(registers)) != 0x2000
+        || std::bit_cast<uintptr_t>(JSC::MachineContext::instructionPointer(registers)->untaggedPtr()) != 0x3000)
+        return 1;
     JSC::Config::enableRestrictedOptions();
     JSC::Options::initializeWithOptionsCustomization([] {
         JSC::Options::useDollarVM() = true;
     });
     JSC::initialize();
     expectDFG = JSC::Options::useDFGJIT();
+    expectFTL = JSC::Options::useFTLJIT();
     if (!JSC::Options::useJIT() || !JSC::Options::useBaselineJIT() || !JSC::Options::useConcurrentJIT()
-        || !JSC::Options::usePollingTraps() || JSC::Options::useFTLJIT()) {
+        || !JSC::Options::usePollingTraps()) {
         std::fprintf(stderr, "SCARLET_DFG_FAIL stage=options\n");
         return 1;
     }
@@ -263,12 +276,16 @@ int main()
         JSObjectSetProperty(context, JSContextGetGlobalObject(context), expected,
             JSValueMakeBoolean(context, expectDFG), kJSPropertyAttributeReadOnly, nullptr);
         JSStringRelease(expected);
+        expected = JSStringCreateWithUTF8CString("EXPECT_FTL");
+        JSObjectSetProperty(context, JSContextGetGlobalObject(context), expected,
+            JSValueMakeBoolean(context, expectFTL), kJSPropertyAttributeReadOnly, nullptr);
+        JSStringRelease(expected);
         bool passed = semantics(context) && interruptLoop(context);
         JSGlobalContextRelease(context);
         if (!passed)
             return 1;
         std::printf("SCARLET_DFG_PASS stage=vm-teardown iteration=%u\n", iteration);
     }
-    std::printf("SCARLET_DFG_PASS stage=complete tier=%s\n", expectDFG ? "DFG" : "Baseline");
+    std::printf("SCARLET_DFG_PASS stage=complete tier=%s\n", tierName());
     return 0;
 }
