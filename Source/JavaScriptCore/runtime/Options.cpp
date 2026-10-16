@@ -709,7 +709,9 @@ static void overrideDefaults()
     Options::usePollingTraps() = true;
 #endif
 
-#if !ENABLE(WEBASSEMBLY)
+#if !ENABLE(WEBASSEMBLY) || OS(SCARLET)
+    // Scarlet's native suspension events do not implement POSIX fault recovery.
+    // Wasm must use explicit bounds checks instead of signal-guarded memory.
     Options::useWasmFastMemory() = false;
     Options::useWasmFaultSignalHandler() = false;
 #endif

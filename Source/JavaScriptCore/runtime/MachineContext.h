@@ -54,6 +54,21 @@ inline std::optional<CodePtr<PlatformRegistersPCPtrTag>> instructionPointer(cons
     return CodePtr<PlatformRegistersPCPtrTag>(std::bit_cast<void*>(regs.pc));
 }
 
+inline void setInstructionPointer(PlatformRegisters& regs, void* value)
+{
+    regs.pc = std::bit_cast<uint64_t>(value);
+}
+
+inline void setInstructionPointer(PlatformRegisters& regs, CodePtr<CFunctionPtrTag> value)
+{
+    setInstructionPointer(regs, value.untaggedPtr());
+}
+
+inline void* wasmInstancePointer(const PlatformRegisters& regs)
+{
+    return std::bit_cast<void*>(regs.gpr[19]);
+}
+
 #if !ENABLE(C_LOOP)
 inline void*& llintInstructionPointer(PlatformRegisters& regs)
 {
