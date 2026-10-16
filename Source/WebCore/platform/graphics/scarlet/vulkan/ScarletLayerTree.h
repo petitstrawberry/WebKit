@@ -30,6 +30,9 @@ class SkiaPaintingEngine;
 class ScarletLayerTree final : public GraphicsLayerFactory, public CoordinatedPlatformLayer::Client {
 public:
     struct Output {
+        // Keep a render target available while the consumer holds its current
+        // image and the next image staged for presentation.
+        static constexpr unsigned slotCount = 3;
         struct Frame {
             int32_t handle { -1 };
             uint32_t width { 0 }, height { 0 };
@@ -51,7 +54,7 @@ public:
         friend class ScarletLayerTree;
         struct Slot { Frame frame; bool leased { false }, ready { false }, reserved { false }; };
         mutable std::mutex mutex;
-        std::array<Slot, 2> slots;
+        std::array<Slot, slotCount> slots;
         bool live { true }, failed { false }, pending { false };
         uint64_t nextGeneration { 0 };
         Statistics counters;

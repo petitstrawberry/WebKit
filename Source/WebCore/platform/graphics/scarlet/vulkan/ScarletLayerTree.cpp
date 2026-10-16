@@ -119,7 +119,7 @@ struct ScarletLayerTree::Scene {
         std::optional<Damage> damage;
         IntSize size;
     };
-    std::array<Slot, 2> slots;
+    std::array<Slot, Output::slotCount> slots;
     std::unique_ptr<ScarletSkiaVulkan::Submission> submission;
     Vector<Function<void(MonotonicTime)>> callbacks;
     IntSize size;
@@ -453,10 +453,10 @@ void ScarletLayerTree::render()
     }
     OptionSet<CompositionReason> reasons { CompositionReason::VideoFrame, CompositionReason::Animation };
     for (const auto& layer : scene.layers) layer->flushCompositingState(reasons);
-    unsigned index = 2;
+    unsigned index = Output::slotCount;
     {
         std::lock_guard lock(m_output->mutex);
-        for (unsigned i = 0; i < 2; ++i) {
+        for (unsigned i = 0; i < Output::slotCount; ++i) {
             auto& slot = m_output->slots[i];
             if (!slot.leased && !slot.ready && !slot.reserved) {
                 index = i;
@@ -466,8 +466,8 @@ void ScarletLayerTree::render()
             }
         }
     }
-    if (index == 2) {
-        // Both images may be held by consumers. Inspect the scene without a
+    if (index == Output::slotCount) {
+        // All images may be held by consumers. Inspect the scene without a
         // render target; never wait for a lease just to discover a no-op.
         Damage delta { scene.size };
         scene.animations = scene.root->collectDamage(scene.size, delta);
@@ -541,13 +541,13 @@ int ScarletLayerTree::readback(uint64_t generation, Vector<uint8_t>& bytes, uint
     assertIsOwner();
     int result = 1;
     m_workQueue->dispatchSync([&] {
-        unsigned index = 2;
+        unsigned index = Output::slotCount;
         {
             std::lock_guard lock(m_output->mutex);
-            for (unsigned i = 0; i < 2; ++i)
+            for (unsigned i = 0; i < Output::slotCount; ++i)
                 if (m_output->slots[i].leased && m_output->slots[i].frame.generation == generation) index = i;
         }
-        if (index == 2 || !m_scene) return;
+        if (index == Output::slotCount || !m_scene) return;
         auto& slot = m_scene->slots[index];
         width = slot.size.width(); height = slot.size.height();
         auto info = SkImageInfo::Make(width, height, kBGRA_8888_SkColorType, kPremul_SkAlphaType, SkColorSpace::MakeSRGB());
