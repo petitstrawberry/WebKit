@@ -1543,6 +1543,9 @@ extern "C" int32_t scarlet_webview_start_response(ScarletWebView* view, const SW
         return status;
     if (!response || response->transport_error || response->body.length)
         return SWV_INVALID_ARGUMENT;
+#if USE(SKIA)
+    ProfileOperation profile(*view, ProfileOperation::Kind::CompleteRequest);
+#endif
     auto result = startScarletLiveResponse(*view->page, *response);
     if (result == SWV_OK || result == SWV_FAILED)
         view->loadState.needsRenderingUpdate = true;
@@ -1556,6 +1559,9 @@ extern "C" int32_t scarlet_webview_append_response(ScarletWebView* view, uint64_
         return status;
     if (finished > 1)
         return SWV_INVALID_ARGUMENT;
+#if USE(SKIA)
+    ProfileOperation profile(*view, ProfileOperation::Kind::CompleteRequest);
+#endif
     auto result = appendScarletLiveResponse(*view->page, id, bytes, finished);
     if (result == SWV_OK || result == SWV_FAILED)
         view->loadState.needsRenderingUpdate = true;
