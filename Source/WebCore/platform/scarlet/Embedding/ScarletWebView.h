@@ -149,6 +149,12 @@ int32_t scarlet_webview_wheel(ScarletWebView*, const SWVWheelEvent*, uint32_t* h
 int32_t scarlet_webview_key(ScarletWebView*, const SWVKeyEvent*, uint32_t* handled);
 int32_t scarlet_webview_poll_request(ScarletWebView*, SWVRequest*); /* SWV_EMPTY: no pending request. */
 int32_t scarlet_webview_complete_request(ScarletWebView*, const SWVResponse*);
+/* Incremental alternative: start headers, append decoded entity bytes, then
+ * finish exactly once. Policy checks precede delivery. Cancellation invalidates
+ * the ID. Owner-thread calls only; each span is copied before return.
+ * complete_request with transport_error also fails an in-progress stream. */
+int32_t scarlet_webview_start_response(ScarletWebView*, const SWVResponse*);
+int32_t scarlet_webview_append_response(ScarletWebView*, uint64_t request_id, SWVBytes, uint32_t finished);
 /* Read-only actual DOM text inspection for embedding smoke tests. */
 int32_t scarlet_webview_text_content(ScarletWebView*, SWVBytes element_id, SWVBytes*);
 /* Actual raster work counters, for embedding performance verification. */

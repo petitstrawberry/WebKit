@@ -14,6 +14,7 @@
 #include "BlobPart.h"
 #include "BlobDataFileReference.h"
 #include "PolicyContainer.h"
+#include <charconv>
 #include <wtf/TZoneMallocInlines.h>
 #include "CacheValidation.h"
 #include "CrossOriginAccessControl.h"
@@ -155,6 +156,7 @@ struct ResponseData {
     std::string errorMessage;
     std::vector<HeaderData> headers;
     Vector<uint8_t> body;
+    bool streaming { false };
 };
 
 bool copyResponse(const SWVResponse& input, ResponseData& output)
@@ -203,6 +205,8 @@ struct Load {
     std::optional<ResponseData> response;
     std::string exportedURL;
     bool transportDetached { false };
+    bool streamFinished { true };
+    size_t receivedBodyBytes { 0 };
 };
 
 struct PollStorage {
@@ -524,14 +528,23 @@ public:
         return SWV_EMPTY;
     }
 
-    int32_t complete(Page& page, const SWVResponse& input)
+    int32_t complete(Page& page, const SWVResponse& input, bool streaming = false)
     {
         RELEASE_ASSERT(WTF::isMainThread());
         auto found = m_ids.find(input.request_id);
-        if (found == m_ids.end() || found->second->page != &page || found->second->phase != Phase::AwaitingResponse
+        if (found == m_ids.end() || found->second->page != &page
             || found->second->loader->reachedTerminalState())
             return SWV_STALE_REQUEST;
         auto load = found->second;
+        if (input.transport_error) {
+            std::string message;
+            if (!copyString(input.error_message, message))
+                return SWV_INVALID_ARGUMENT;
+            fail(load, liveError(LiveError::Transport, load->loader->request().url(), nativeString(message)));
+            return SWV_OK;
+        }
+        if (load->phase != Phase::AwaitingResponse)
+            return SWV_STALE_REQUEST;
         ResponseData response;
         if (!copyResponse(input, response))
             return SWV_INVALID_ARGUMENT;
@@ -542,8 +555,30 @@ public:
             fail(load, liveError(LiveError::Transport, load->loader->request().url(), "Host response URL differs from the exact requested HTTP hop"_s));
             return SWV_FAILED;
         }
+        response.streaming = streaming;
+        load->streamFinished = !streaming;
+        load->receivedBodyBytes = response.body.size();
         load->response = std::move(response);
         load->phase = Phase::ResponsePending;
+        pump();
+        return SWV_OK;
+    }
+
+    int32_t append(Page& page, uint64_t id, SWVBytes bytes, bool finished)
+    {
+        RELEASE_ASSERT(WTF::isMainThread());
+        auto found = m_ids.find(id);
+        if (found == m_ids.end() || found->second->page != &page)
+            return SWV_STALE_REQUEST;
+        auto load = found->second;
+        if (!isActive(load) || !load->response || !load->response->streaming || load->streamFinished)
+            return SWV_STALE_REQUEST;
+        if ((bytes.length && !bytes.data) || bytes.length > maxBodyBytes - load->receivedBodyBytes)
+            return SWV_INVALID_ARGUMENT;
+        load->receivedBodyBytes += bytes.length;
+        if (bytes.length)
+            load->response->body.append(std::span<const uint8_t> { bytes.data, bytes.length });
+        load->streamFinished = finished;
         pump();
         return SWV_OK;
     }
@@ -674,7 +709,7 @@ private:
     ResourceResponse makeResponse(const ResponseData& data)
     {
         ResourceResponse response { URL { URL { }, nativeString(data.url) }, String { },
-            static_cast<long long>(data.body.size()), String { } };
+            data.streaming ? -1 : static_cast<long long>(data.body.size()), String { } };
         response.setSource(ResourceResponse::Source::Network);
         // ABI v1 does not carry a certificate chain; the host must verify TLS.
         // Native main-resource clients still require the certificate-info
@@ -688,6 +723,13 @@ private:
         if (!contentType.isEmpty()) {
             response.setMimeType(extractMIMETypeFromMediaType(contentType).convertToASCIILowercase());
             response.setTextEncodingName(extractCharsetFromMediaType(contentType).toString());
+        }
+        if (data.streaming) {
+            auto length = utf8(response.httpHeaderField(HTTPHeaderName::ContentLength).stripWhiteSpace());
+            int64_t expected = -1;
+            auto parsed = std::from_chars(length.data(), length.data() + length.size(), expected);
+            if (parsed.ec == std::errc { } && parsed.ptr == length.data() + length.size() && expected >= 0)
+                response.setExpectedContentLength(expected);
         }
         return response;
     }
@@ -733,18 +775,22 @@ private:
         load->phase = Phase::DeliveringPayload;
         // Keep the cloned payload alive across callbacks that may remove the
         // strategy ownership record or start another navigation.
-        auto response = std::move(*load->response);
-        load->response.reset();
-        if (!response.body.isEmpty()) {
+        auto body = WTF::move(load->response->body);
+        if (!body.isEmpty()) {
             // The ABI bytes were already cloned when completion was accepted.
             // Transfer that allocation into WebCore instead of copying the
             // complete image/script/media response again on its owner thread.
-            auto length = response.body.size();
-            auto buffer = SharedBuffer::create(WTF::move(response.body));
+            auto length = body.size();
+            auto buffer = SharedBuffer::create(WTF::move(body));
             load->loader->didReceiveData(buffer.get(), static_cast<long long>(length), DataPayloadBytes);
         }
         if (!isActive(load))
             return;
+        if (!load->streamFinished) {
+            load->phase = Phase::PayloadReady;
+            return;
+        }
+        load->response.reset();
         load->phase = Phase::FinishPending;
         deliverFinish(load);
     }
@@ -936,6 +982,8 @@ void registerScarletLivePage(Page& page, void* identity) { liveLoader().register
 void unregisterScarletLivePage(Page& page) { liveLoader().unregisterPage(page); }
 int32_t pollScarletLiveRequest(Page& page, SWVRequest& request) { return liveLoader().poll(page, request); }
 int32_t completeScarletLiveRequest(Page& page, const SWVResponse& response) { return liveLoader().complete(page, response); }
+int32_t startScarletLiveResponse(Page& page, const SWVResponse& response) { return liveLoader().complete(page, response, true); }
+int32_t appendScarletLiveResponse(Page& page, uint64_t id, SWVBytes bytes, bool finished) { return liveLoader().append(page, id, bytes, finished); }
 uint32_t pendingScarletLiveRequests(Page& page) { return liveLoader().pending(page); }
 std::string scarletLiveLastError(Page& page) { return liveLoader().lastError(page); }
 

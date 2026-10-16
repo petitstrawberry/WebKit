@@ -1536,6 +1536,32 @@ extern "C" int32_t scarlet_webview_complete_request(ScarletWebView* view, const 
     return result;
 }
 
+extern "C" int32_t scarlet_webview_start_response(ScarletWebView* view, const SWVResponse* response)
+{
+    auto status = viewStatus(view);
+    if (status != SWV_OK)
+        return status;
+    if (!response || response->transport_error || response->body.length)
+        return SWV_INVALID_ARGUMENT;
+    auto result = startScarletLiveResponse(*view->page, *response);
+    if (result == SWV_OK || result == SWV_FAILED)
+        view->loadState.needsRenderingUpdate = true;
+    return result;
+}
+
+extern "C" int32_t scarlet_webview_append_response(ScarletWebView* view, uint64_t id, SWVBytes bytes, uint32_t finished)
+{
+    auto status = viewStatus(view);
+    if (status != SWV_OK)
+        return status;
+    if (finished > 1)
+        return SWV_INVALID_ARGUMENT;
+    auto result = appendScarletLiveResponse(*view->page, id, bytes, finished);
+    if (result == SWV_OK || result == SWV_FAILED)
+        view->loadState.needsRenderingUpdate = true;
+    return result;
+}
+
 #if ENABLE(VIDEO)
 static void reportMediaProfile(ScarletWebView& view, HTMLVideoElement& video, uint32_t index)
 {

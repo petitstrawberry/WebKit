@@ -267,7 +267,23 @@ public:
         }
         if (m_shared.termination && route == 13)
             m_shared.phase.store(2, std::memory_order_release);
-        if (!status(scarlet_webview_complete_request(m_view, &response), "complete-http-hop"))
+        if (!response.transport_error && !m_shared.termination) {
+            auto body = response.body;
+            response.body = { };
+            if (!status(scarlet_webview_start_response(m_view, &response), "stream-headers"))
+                return false;
+            size_t split = body.length / 2;
+            for (auto chunk : { SWVBytes { body.data, split }, SWVBytes { body.data ? body.data + split : nullptr, body.length - split } }) {
+                auto result = scarlet_webview_append_response(m_view, response.request_id, chunk, 0);
+                // Policy rejection and redirects can retire the old hop before
+                // the host observes cancellation; those chunks must be stale.
+                if (result != SWV_STALE_REQUEST && !status(result, "stream-data"))
+                    return false;
+            }
+            auto result = scarlet_webview_append_response(m_view, response.request_id, { }, 1);
+            if (result != SWV_STALE_REQUEST && !status(result, "stream-finish"))
+                return false;
+        } else if (!status(scarlet_webview_complete_request(m_view, &response), "complete-http-hop"))
             return false;
         if (!m_duplicateChecked && !m_shared.termination) {
             auto result = scarlet_webview_complete_request(m_view, &response);
