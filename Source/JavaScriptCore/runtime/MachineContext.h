@@ -41,6 +41,33 @@ namespace MachineContext {
 
 template<typename T = void*> T stackPointer(const PlatformRegisters&);
 
+#if OS(SCARLET)
+// Native process-control suspension saves the interrupted AArch64 user context,
+// not the event handler's registers. Use that same snapshot as the GC scanner.
+template<typename T = void*> inline T framePointer(const PlatformRegisters& regs)
+{
+    return std::bit_cast<T>(regs.gpr[29]);
+}
+
+inline std::optional<CodePtr<PlatformRegistersPCPtrTag>> instructionPointer(const PlatformRegisters& regs)
+{
+    return CodePtr<PlatformRegistersPCPtrTag>(std::bit_cast<void*>(regs.pc));
+}
+
+#if !ENABLE(C_LOOP)
+inline void*& llintInstructionPointer(PlatformRegisters& regs)
+{
+    static_assert(LLInt::LLIntPC == ARM64Registers::x4, "Wrong LLInt PC.");
+    return reinterpret_cast<void*&>(regs.gpr[4]);
+}
+
+inline void* llintInstructionPointer(const PlatformRegisters& regs)
+{
+    return llintInstructionPointer(const_cast<PlatformRegisters&>(regs));
+}
+#endif
+#endif
+
 #if OS(WINDOWS) || HAVE(MACHINE_CONTEXT)
 template<typename T = void*> T framePointer(const PlatformRegisters&);
 inline CodePtr<PlatformRegistersLRPtrTag> linkRegister(const PlatformRegisters&);
