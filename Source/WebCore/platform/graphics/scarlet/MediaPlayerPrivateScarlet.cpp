@@ -31,6 +31,9 @@
 #include <cstdlib>
 #include <limits>
 #include <mutex>
+#include <algorithm>
+#include <memory>
+#include <vector>
 #include <skia/core/SkCanvas.h>
 #include <skia/core/SkSurface.h>
 #include <skia/gpu/ganesh/SkSurfaceGanesh.h>
@@ -633,12 +636,16 @@ static SkYUVColorSpace videoColorSpace(const ScarletMediaFrame& frame)
         return frame.full_range ? kBT2020_8bit_Full_SkYUVColorSpace : kBT2020_8bit_Limited_SkYUVColorSpace;
     return frame.full_range ? kJPEG_Full_SkYUVColorSpace : kRec601_Limited_SkYUVColorSpace;
 }
-static sk_sp<SkImage> uploadVideoFrame(const ScarletMediaFrame& frame)
+struct VideoFrameUploadResult {
+    sk_sp<SkImage> image;
+    bool retryable { false };
+};
+static VideoFrameUploadResult uploadVideoFrame(const ScarletMediaFrame& frame)
 {
     if (!frame.width || !frame.height || frame.width > 16384 || frame.height > 16384
         || (frame.format != SCARLET_MEDIA_I420 && frame.format != SCARLET_MEDIA_NV12) || !prepareSkiaContext()) {
         
-        return nullptr;
+        return { };
     }
     auto* context = PlatformDisplay::sharedDisplay().skiaGrContext();
     auto configuration = frame.format == SCARLET_MEDIA_I420 ? SkYUVAInfo::PlaneConfig::kY_U_V : SkYUVAInfo::PlaneConfig::kY_UV;
@@ -652,18 +659,31 @@ static sk_sp<SkImage> uploadVideoFrame(const ScarletMediaFrame& frame)
         if (!frame.planes[i] || frame.strides[i] < width * channels || frame.strides[i] > SIZE_MAX / height
             || frame.plane_sizes[i] < frame.strides[i] * height) {
             
-            return nullptr;
+            return { };
         }
         auto imageInfo = SkImageInfo::Make(width, height, channels == 2 ? kR8G8_unorm_SkColorType : kGray_8_SkColorType, kOpaque_SkAlphaType);
         planes[i].reset(imageInfo, frame.planes[i], frame.strides[i]);
     }
     auto pixmaps = SkYUVAPixmaps::FromExternalPixmaps(info, planes);
     auto image = SkImages::TextureFromYUVAPixmaps(context, pixmaps, skgpu::Mipmapped::kNo, false, SkColorSpace::MakeSRGB());
-    if (!image) {
-        
-        return nullptr;
-    }
-    return image;
+    if (image)
+        return { WTF::move(image), false };
+    if (context->isDeviceLost() || !context->oomed())
+        return { };
+
+    // A valid decoded frame can fail to get a texture under GPU pressure.
+    // Retire outstanding users before reclaiming Ganesh's unused resources;
+    // this recovery runs on the context owner, outside allocator callbacks.
+    context->flushAndSubmit(GrSyncCpu::kYes);
+    context->checkAsyncWorkCompletion();
+    context->freeGpuResources();
+    if (context->isDeviceLost())
+        return { };
+    image = SkImages::TextureFromYUVAPixmaps(context, pixmaps, skgpu::Mipmapped::kNo, false, SkColorSpace::MakeSRGB());
+    if (image)
+        return { WTF::move(image), false };
+    bool retryable = !context->isDeviceLost() && context->oomed();
+    return { nullptr, retryable };
 }
 #if USE(COORDINATED_GRAPHICS)
 struct MediaPlayerPrivateScarlet::VideoFramePump {
@@ -692,6 +712,8 @@ struct MediaPlayerPrivateScarlet::VideoFramePump {
     uint64_t serial;
     std::shared_ptr<Feedback> feedback { std::make_shared<Feedback>() };
     sk_sp<SkImage> image; // Compositor only.
+    struct UploadCompletion { bool finished { false }; };
+    std::vector<std::shared_ptr<UploadCompletion>> uploads; // Compositor only, at most three.
     VideoFramePump(RunLoop& loop, ScarletMediaSession* s, CoordinatedPlatformLayerBufferProxy& p,
         MediaPlayerPrivateScarlet& media)
         : runLoop(loop)
@@ -718,11 +740,48 @@ struct MediaPlayerPrivateScarlet::VideoFramePump {
         ScarletMediaStatus status { };
         scarlet_media_session_status(session, &status);
         timer.startOneShot(Seconds::fromMilliseconds(status.paused ? 100 : 8));
+        auto* context = PlatformDisplay::sharedDisplay().skiaGrContext();
+        if (!context || context->isDeviceLost()) {
+            std::lock_guard lock(feedback->mutex);
+            feedback->latest.failed = true;
+            return;
+        }
+        // Retire uploads even when the video is offscreen and the page has no
+        // damage to submit. Backpressure drops stale decoded frames upstream;
+        // it never queues unbounded texture uploads behind a hidden player.
+        context->checkAsyncWorkCompletion();
+        std::erase_if(uploads, [](const auto& upload) { return upload->finished; });
+        if (uploads.size() >= 3)
+            return;
         ScarletMediaFrame frame { };
         if (scarlet_media_session_acquire_frame(session, &frame) <= 0) return;
         auto release = makeScopeExit([&] { scarlet_media_session_release_frame(session, frame.lease); });
-        image = uploadVideoFrame(frame);
-        if (!image) { std::lock_guard lock(feedback->mutex); feedback->latest.failed = true; return; }
+        auto upload = uploadVideoFrame(frame);
+        if (!upload.image) {
+            if (!upload.retryable) {
+                std::lock_guard lock(feedback->mutex);
+                feedback->latest.failed = true;
+            }
+            return; // Release this lease; the existing timer acquires a fresh frame.
+        }
+        auto completion = std::make_shared<UploadCompletion>();
+        GrFlushInfo flush;
+        flush.fFinishedContext = new std::shared_ptr<UploadCompletion>(completion);
+        flush.fFinishedProc = [](void* opaque) {
+            std::unique_ptr<std::shared_ptr<UploadCompletion>> completion(static_cast<std::shared_ptr<UploadCompletion>*>(opaque));
+            (*completion)->finished = true;
+        };
+        // The finish callback makes this flush effective even for an image
+        // that has never been drawn. Submit its Y/UV transfers independently
+        // from page presentation; a no-damage scene must not strand them.
+        context->flush(upload.image, flush);
+        if (!context->submit(GrSyncCpu::kNo)) {
+            std::lock_guard lock(feedback->mutex);
+            feedback->latest.failed = true;
+            return;
+        }
+        uploads.push_back(WTF::move(completion));
+        image = WTF::move(upload.image);
         auto size = FloatSize { static_cast<float>(frame.width), static_cast<float>(frame.height) };
         double mediaTime = frame.presentation_us / 1000000.0;
         ++serial;
@@ -820,14 +879,33 @@ void MediaPlayerPrivateScarlet::updateFrame()
         return;
     }
 #endif
+    if (!m_visible)
+        return;
+    auto* context = PlatformDisplay::sharedDisplay().skiaGrContext();
+    if (!context || context->isDeviceLost()) {
+        fail(MediaPlayer::NetworkState::DecodeError);
+        return;
+    }
+    context->checkAsyncWorkCompletion();
     auto* profile = mediaPollProfile();
     ScarletMediaFrame frame { };
     if (profileMediaPollPhase(profile, MediaPollPhase::Acquire, [&] { return scarlet_media_session_acquire_frame(m_session, &frame); }) <= 0)
         return;
     auto release = makeScopeExit([&] { profileMediaPollPhase(profile, MediaPollPhase::Release, [&] { scarlet_media_session_release_frame(m_session, frame.lease); }); });
-    auto* context = PlatformDisplay::sharedDisplay().skiaGrContext();
-    auto image = uploadVideoFrame(frame);
-    if (!image) { fail(MediaPlayer::NetworkState::DecodeError); return; }
+    auto upload = uploadVideoFrame(frame);
+    if (!upload.image) {
+        if (!upload.retryable)
+            fail(MediaPlayer::NetworkState::DecodeError);
+        return;
+    }
+    auto image = WTF::move(upload.image);
+    // The owner preview/canvas path also has to send transfers when no page
+    // paint follows this poll. Normal composited playback uses the pump above.
+    context->flush();
+    if (!context->submit(GrSyncCpu::kNo)) {
+        fail(MediaPlayer::NetworkState::DecodeError);
+        return;
+    }
     profileMediaPollPhase(profile, MediaPollPhase::Replace, [&] { m_image = NativeImage::create(WTF::move(image), context); });
     ++m_videoFrameSerial;
     m_frameMediaTime = frame.presentation_us / 1000000.0;
