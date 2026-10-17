@@ -88,6 +88,7 @@ private:
     void assertIsOwner() const;
     void render();
     bool commit();
+    void flushScrollPositions(const Vector<Ref<CoordinatedPlatformLayer>>&, const OptionSet<CompositionReason>&);
     void waitUntilPaintingComplete();
     Vector<Ref<CoordinatedPlatformLayer>> layersSnapshot() const;
     Ref<GraphicsLayer> createGraphicsLayer(GraphicsLayer::Type, GraphicsLayerClient&) override;
@@ -120,6 +121,7 @@ private:
     HashMap<uint64_t, Ref<CoordinatedImageBackingStore>> m_imageBackingStores; // Owner only.
     RefPtr<GraphicsLayer> m_rootLayer, m_overlayLayer;
     mutable std::mutex m_commitMutex;
+    std::mutex m_positionMutex;
     Vector<Ref<CoordinatedPlatformLayer>> m_pendingLayers, m_removedLayers;
     Vector<Ref<CoordinatedPlatformLayer>> m_pendingRoots;
     bool m_commitPending { false };

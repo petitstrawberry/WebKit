@@ -296,9 +296,10 @@ bool ScarletLayerTree::hasPendingComposition() const
 }
 void ScarletLayerTree::notifyCompositionRequired()
 {
-    assertIsOwner();
     if (m_detached) return;
     m_compositionRequired = true;
+    if (!isMainThread()) return; // Scroll positions do not require a DOM flush.
+    assertIsOwner();
     m_ownerCommitRequired = true;
     m_scheduleRenderingUpdate();
 }
@@ -349,7 +350,17 @@ bool ScarletLayerTree::flush(LocalFrameView& frameView)
     assertIsOwner();
     if (m_detached || frameView.needsLayout()) return false;
     auto layers = layersSnapshot();
-    for (const auto& layer : layers) layer->flushPendingState();
+    {
+        std::lock_guard positionLock(m_positionMutex);
+        // Apply a complete scrolling-tree position update as one group, so
+        // fixed/sticky children cannot land in a different scroll generation.
+        if (m_scrollingTree) {
+            Locker treeLock { m_scrollingTree->treeLock() };
+            for (const auto& layer : layers) layer->flushPendingState();
+        } else {
+            for (const auto& layer : layers) layer->flushPendingState();
+        }
+    }
     // Match LayerTreeHost: share native-image uploads across layers and eject
     // stores as soon as this map is their only remaining owner.
     m_imageBackingStores.removeIf([](auto& entry) { return entry.value->hasOneRef(); });
@@ -366,6 +377,19 @@ bool ScarletLayerTree::flush(LocalFrameView& frameView)
     m_ownerCommitRequired = false;
     m_output->notify();
     return true;
+}
+void ScarletLayerTree::flushScrollPositions(const Vector<Ref<CoordinatedPlatformLayer>>& layers, const OptionSet<CompositionReason>& reasons)
+{
+    std::lock_guard positionLock(m_positionMutex);
+    if (m_scrollingTree) {
+        Locker treeLock { m_scrollingTree->treeLock() };
+        // Consume only scroll-thread writes here. Ordinary GraphicsLayer
+        // positions are committed by the Page with the matching layout state.
+        for (const auto& layer : layers) layer->flushPendingState(true);
+        for (const auto& layer : layers) layer->flushPositionChanges(reasons);
+    } else {
+        for (const auto& layer : layers) layer->flushPositionChanges(reasons);
+    }
 }
 bool ScarletLayerTree::commit()
 {
@@ -395,7 +419,7 @@ bool ScarletLayerTree::commit()
     for (const auto& layer : removed) layer->invalidateTarget();
     scene.layers = WTF::move(layers);
     OptionSet<CompositionReason> reasons { CompositionReason::RenderingUpdate, CompositionReason::VideoFrame, CompositionReason::Animation, CompositionReason::AsyncScrolling };
-    for (const auto& layer : scene.layers) layer->flushPositionChanges(reasons);
+    flushScrollPositions(scene.layers, reasons);
     for (const auto& layer : scene.layers) layer->flushCompositingState(reasons);
     for (const auto& layer : scene.layers)
         if (layer->hasPendingBackingStoreTileUpdates()) layer->processPendingBackingStoreTileUpdates();
@@ -476,7 +500,7 @@ void ScarletLayerTree::render()
         return;
     }
     OptionSet<CompositionReason> reasons { CompositionReason::VideoFrame, CompositionReason::Animation, CompositionReason::AsyncScrolling };
-    for (const auto& layer : scene.layers) layer->flushPositionChanges(reasons);
+    flushScrollPositions(scene.layers, reasons);
     for (const auto& layer : scene.layers) layer->flushCompositingState(reasons);
     unsigned index = Output::slotCount;
     {

@@ -1064,7 +1064,7 @@ void CoordinatedPlatformLayer::waitUntilPaintingComplete()
         m_backingStoreProxy->waitUntilPaintingComplete();
 }
 
-void CoordinatedPlatformLayer::flushPendingState()
+void CoordinatedPlatformLayer::flushPendingState(bool scrollingOnly)
 {
     Locker locker { m_lock };
     if (!m_pendingState.position && !m_pendingState.boundsOrigin && !m_pendingState.positionForScrolling && !m_pendingState.boundsOriginForScrolling)
@@ -1074,14 +1074,14 @@ void CoordinatedPlatformLayer::flushPendingState()
     if (m_pendingState.positionForScrolling) {
         m_pendingState.position = std::nullopt;
         position = *std::exchange(m_pendingState.positionForScrolling, std::nullopt);
-    } else if (m_pendingState.position)
+    } else if (!scrollingOnly && m_pendingState.position)
         position = *std::exchange(m_pendingState.position, std::nullopt);
 
     std::optional<FloatPoint> boundsOrigin;
     if (m_pendingState.boundsOriginForScrolling) {
         m_pendingState.boundsOrigin = std::nullopt;
         boundsOrigin = *std::exchange(m_pendingState.boundsOriginForScrolling, std::nullopt);
-    } else if (m_pendingState.boundsOrigin)
+    } else if (!scrollingOnly && m_pendingState.boundsOrigin)
         boundsOrigin = *std::exchange(m_pendingState.boundsOrigin, std::nullopt);
 
     bool requireComposition = false;

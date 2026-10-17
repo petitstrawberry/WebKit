@@ -218,7 +218,7 @@ public:
     void updateContents(bool affectedByTransformAnimation) WTF_REQUIRES_LOCK(m_lock);
     void updateBackingStore();
 
-    void flushPendingState();
+    void flushPendingState(bool scrollingOnly = false);
     void flushPositionChanges(const OptionSet<CompositionReason>&);
     void flushCompositingState(const OptionSet<CompositionReason>&);
 
