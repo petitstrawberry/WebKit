@@ -30,6 +30,7 @@
 #include <thread>
 #include <cstdlib>
 #include <mutex>
+#include <atomic>
 
 namespace WebCore {
 struct Dispatch {
@@ -155,6 +156,8 @@ struct SharedVulkanDevice {
     VkPhysicalDevice physical { };
     VkQueue queue { };
     uint32_t queueIndex { };
+    std::atomic<unsigned> contextCount { 0 };
+    size_t cacheBudgetBytes { 64 * 1024 * 1024 };
     ~SharedVulkanDevice()
     {
         if (dispatch.device) dispatch.deviceFunction<PFN_vkDestroyDevice>("vkDestroyDevice")(dispatch.device, nullptr);
@@ -168,7 +171,19 @@ struct ScarletSkiaVulkan::State {
         checkThread();
         context = nullptr;
         allocator = nullptr;
+        if (countedContext)
+            shared->contextCount.fetch_sub(1, std::memory_order_relaxed);
     }
+    void updateCacheBudget()
+    {
+        checkThread();
+        if (!context || context->abandoned()) return;
+        auto count = std::max(1u, shared->contextCount.load(std::memory_order_relaxed));
+        auto limit = shared->cacheBudgetBytes / count;
+        if (context->getResourceCacheLimit() != limit)
+            context->setResourceCacheLimit(limit);
+    }
+    bool countedContext { false };
     std::shared_ptr<SharedVulkanDevice> shared;
     Dispatch dispatch;
     sk_sp<Allocator> allocator;
@@ -230,6 +245,17 @@ static int initializeDevice(SharedVulkanDevice& owner)
     owner.queue = queue;
     owner.queueIndex = queueIndex;
     owner.physical = physical;
+    VkPhysicalDeviceMemoryProperties memory { };
+    dispatch.instanceFunction<PFN_vkGetPhysicalDeviceMemoryProperties>("vkGetPhysicalDeviceMemoryProperties")(physical, &memory);
+    VkDeviceSize heapBytes = 0;
+    for (uint32_t heap = 0; heap < memory.memoryHeapCount; ++heap) {
+        if (memory.memoryHeaps[heap].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT)
+            heapBytes = std::max(heapBytes, memory.memoryHeaps[heap].size);
+    }
+    // All Ganesh contexts share this heap. Reserve half for live/borrowed tiles,
+    // output images and uploads that are not purgeable resource-cache entries.
+    if (heapBytes)
+        owner.cacheBudgetBytes = static_cast<size_t>(std::min<VkDeviceSize>(256 * 1024 * 1024, heapBytes / 2));
     queueSubmit = dispatch.deviceFunction<PFN_vkQueueSubmit>("vkQueueSubmit");
     queueWaitIdle = dispatch.deviceFunction<PFN_vkQueueWaitIdle>("vkQueueWaitIdle");
     deviceWaitIdle = dispatch.deviceFunction<PFN_vkDeviceWaitIdle>("vkDeviceWaitIdle");
@@ -293,6 +319,9 @@ int initialize(DeviceState& owner)
     options.fAvoidStencilBuffers = !stencil;
     owner.context = GrDirectContexts::MakeVulkan(backend, options);
     if (!owner.context) { std::fprintf(stderr, "SKIA_VULKAN_FAIL Ganesh context\n"); return 7; }
+    owner.shared->contextCount.fetch_add(1, std::memory_order_relaxed);
+    owner.countedContext = true;
+    owner.updateCacheBudget();
     return 0;
 }
 struct ScarletSkiaVulkan::Surface::State {
@@ -331,7 +360,7 @@ std::shared_ptr<ScarletSkiaVulkan> ScarletSkiaVulkan::create()
 }
 GrDirectContext* ScarletSkiaVulkan::grContext() const
 {
-    m_state->checkThread();
+    m_state->updateCacheBudget();
     return m_state->context.get();
 }
 SkSurface& ScarletSkiaVulkan::Surface::skSurface() const
@@ -373,7 +402,7 @@ ScarletSkiaVulkan::Submission::~Submission()
 }
 std::unique_ptr<ScarletSkiaVulkan::Submission> ScarletSkiaVulkan::submitAsync(Surface& surface)
 {
-    m_state->checkThread();
+    m_state->updateCacheBudget();
     if (surface.m_state->owner.get() != this || m_state->context->abandoned())
         return nullptr;
     auto state = std::make_unique<Submission::State>();
@@ -409,7 +438,7 @@ bool ScarletSkiaVulkan::submit(Surface& surface)
 }
 std::unique_ptr<ScarletSkiaVulkan::Surface> ScarletSkiaVulkan::createSurface(uint32_t width, uint32_t height, const SkSurfaceProps* properties)
 {
-    m_state->checkThread();
+    m_state->updateCacheBudget();
     if (!width || !height || width > static_cast<uint32_t>(m_state->context->maxRenderTargetSize()) || height > static_cast<uint32_t>(m_state->context->maxRenderTargetSize()) || m_state->context->abandoned()) return nullptr;
     auto state = std::make_unique<Surface::State>();
     state->owner = shared_from_this();

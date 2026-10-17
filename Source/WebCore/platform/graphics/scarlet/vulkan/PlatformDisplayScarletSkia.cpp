@@ -12,9 +12,8 @@ static ThreadSpecific<std::unique_ptr<PlatformDisplay>>& threadDisplay()
 }
 PlatformDisplay::PlatformDisplay() : m_context(ScarletSkiaVulkan::create())
 {
-    // This is an on-demand cache ceiling, not a reservation. Retained tiles,
-    // video planes and filter targets can exceed 80 MiB at Retina sizes.
-    if (m_context) m_context->grContext()->setResourceCacheLimit(256 * 1024 * 1024);
+    // ScarletSkiaVulkan shares one cache budget across the device's contexts.
+    // Each context applies its current share on its own thread before use.
 }
 PlatformDisplay& PlatformDisplay::sharedDisplay()
 {
