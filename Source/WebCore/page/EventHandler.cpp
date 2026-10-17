@@ -3508,7 +3508,7 @@ bool EventHandler::processWheelEventForScrolling(const PlatformWheelEvent& event
 
 void EventHandler::wheelEventWasProcessedByMainThread(const PlatformWheelEvent& wheelEvent, OptionSet<EventHandling> eventHandling)
 {
-    [[maybe_unused]] auto gestureState = updateWheelGestureState(wheelEvent, eventHandling);
+    updateWheelGestureState(wheelEvent, eventHandling);
 
 #if ENABLE(ASYNC_SCROLLING)
 
@@ -3518,7 +3518,7 @@ void EventHandler::wheelEventWasProcessedByMainThread(const PlatformWheelEvent& 
     RefPtr view = m_frame->view();
     if (RefPtr scrollingCoordinator = protect(m_frame->page())->scrollingCoordinator()) {
         if (scrollingCoordinator->coordinatesScrollingForFrameView(*view))
-            scrollingCoordinator->wheelEventWasProcessedByMainThread(wheelEvent, gestureState);
+            scrollingCoordinator->wheelEventWasProcessedByMainThread(wheelEvent, m_wheelScrollGestureState);
     }
 #endif
 }
