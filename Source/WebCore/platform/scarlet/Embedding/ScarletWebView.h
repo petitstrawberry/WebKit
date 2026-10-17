@@ -37,6 +37,14 @@ typedef struct {
     int32_t scroll_x; int32_t scroll_y;
     uint32_t can_go_back; uint32_t can_go_forward;
 } SWVState;
+/* Owner-thread fullscreen request/acknowledgement, independent of SWVState ABI.
+ * Report platform denial with fullscreen=0 for an enter request. request_id=0
+ * reports an unsolicited platform state change, e.g. forced exit. */
+typedef struct { uint64_t request_id; uint32_t requested; uint32_t active; } SWVFullscreenState;
+int32_t scarlet_webview_fullscreen_state(ScarletWebView*, SWVFullscreenState*);
+int32_t scarlet_webview_fullscreen_changed(ScarletWebView*, uint64_t request_id, uint32_t fullscreen);
+int32_t scarlet_webview_exit_fullscreen(ScarletWebView*);
+
 typedef struct {
     uint32_t kind; uint32_t button; uint32_t modifiers; uint32_t click_count;
     double x; double y; double global_x; double global_y;

@@ -38,6 +38,9 @@
 #include "FileChooser.h"
 #include "FileIconLoader.h"
 #include "FocusOptions.h"
+#include "DocumentFullscreen.h"
+#include "Element.h"
+#include "NodeDocument.h"
 #include "Icon.h"
 #include "Page.h"
 #include "PopupMenu.h"
@@ -375,6 +378,49 @@ private:
     {
         if (layer)
             unsupported("Scarlet embedding does not attach native overlay layers"_s);
+    }
+#endif
+#if ENABLE(FULLSCREEN_API)
+    bool supportsFullScreenForElement(const Element&, bool) final { return true; }
+    void enterFullScreenForElement(Element& element, HTMLMediaElementEnums::VideoFullscreenMode mode,
+        CompletionHandler<void(ExceptionOr<void>)>&& willEnter, CompletionHandler<bool(bool)>&& didEnter) final
+    {
+        if (auto previous = std::exchange(m_state.fullscreenCompletion, { }))
+            previous(false);
+        ++m_state.fullscreenRequest;
+        m_state.fullscreenRequested = true;
+        m_state.fullscreenCompletion = [element = Ref { element }, mode, willEnter = WTF::move(willEnter), didEnter = WTF::move(didEnter), state = &m_state](bool accepted) mutable {
+            if (!accepted) {
+                willEnter(Exception { ExceptionCode::TypeError, "Native fullscreen request was declined."_s });
+                didEnter(false);
+                return;
+            }
+            auto result = element->document().fullscreen().willEnterFullscreen(element, mode);
+            bool entered = !result.hasException();
+            willEnter(WTF::move(result));
+            if (!didEnter(entered) || !entered) {
+                state->fullscreenRequested = false;
+                ++state->fullscreenRequest;
+            }
+        };
+        if (m_state.fullscreenActive) {
+            auto completion = std::exchange(m_state.fullscreenCompletion, { });
+            completion(true);
+        }
+    }
+    void exitFullScreenForElement(Element* element, CompletionHandler<void()>&& didExit) final
+    {
+        if (auto previous = std::exchange(m_state.fullscreenCompletion, { }))
+            previous(false);
+        ++m_state.fullscreenRequest;
+        m_state.fullscreenRequested = false;
+        if (element)
+            element->document().fullscreen().willExitFullscreen();
+        if (!m_state.fullscreenActive) {
+            didExit();
+            return;
+        }
+        m_state.fullscreenCompletion = [didExit = WTF::move(didExit)](bool) mutable { didExit(); };
     }
 #endif
     bool usePluginRendererScrollableArea(LocalFrame&) const final { return false; }

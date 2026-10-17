@@ -29,6 +29,7 @@
 #include <WebCore/FloatRect.h>
 #include <WebCore/IntRect.h>
 #include <wtf/Platform.h>
+#include <wtf/CompletionHandler.h>
 #include <wtf/text/WTFString.h>
 
 namespace WebCore {
@@ -38,6 +39,12 @@ void configureScarletFrameView(LocalFrameView&);
 
 struct ScarletFrameLoadState {
     bool loading { false };
+#if ENABLE(FULLSCREEN_API)
+    uint64_t fullscreenRequest { 0 };
+    bool fullscreenRequested { false };
+    bool fullscreenActive { false };
+    CompletionHandler<void(bool)> fullscreenCompletion;
+#endif
     bool needsPaint { true };
     bool needsRenderingUpdate { true };
     bool fullPaint { true };

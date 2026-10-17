@@ -19,6 +19,7 @@
 #include "BackForwardController.h"
 #include "CommonVM.h"
 #include "Document.h"
+#include "DocumentFullscreen.h"
 #include "DocumentView.h"
 #include "Element.h"
 #if ENABLE(VIDEO)
@@ -927,12 +928,76 @@ extern "C" int32_t scarlet_webview_create(const SWVConfiguration* configuration,
     }
     configureView(*view->frame->view());
     view->page->focusController().setActive(true);
+#if ENABLE(FULLSCREEN_API)
+    view->page->settings().setFullScreenEnabled(true);
+#endif
     view->page->focusController().setFocused(true);
     view->page->focusController().setFocusedFrame(view->frame.get());
     auto* pointer = view.release();
     views.insert(pointer);
     *out = pointer;
     return SWV_OK;
+}
+
+extern "C" int32_t scarlet_webview_fullscreen_state(ScarletWebView* view, SWVFullscreenState* out)
+{
+    auto status = viewStatus(view);
+    if (status != SWV_OK) return status;
+    if (!out) return SWV_INVALID_ARGUMENT;
+    *out = { };
+#if ENABLE(FULLSCREEN_API)
+    auto& state = view->loadState;
+    *out = { state.fullscreenRequest, state.fullscreenRequested, state.fullscreenActive };
+#endif
+    return SWV_OK;
+}
+
+extern "C" int32_t scarlet_webview_fullscreen_changed(ScarletWebView* view, uint64_t request, uint32_t active)
+{
+    auto status = viewStatus(view);
+    if (status != SWV_OK) return status;
+    if (active > 1) return SWV_INVALID_ARGUMENT;
+#if ENABLE(FULLSCREEN_API)
+    auto& state = view->loadState;
+    if (request && request != state.fullscreenRequest) return SWV_STALE_REQUEST;
+    state.fullscreenActive = active;
+    if (request) {
+        bool accepted = state.fullscreenRequested == !!active;
+        if (!accepted) state.fullscreenRequested = active;
+        if (auto completion = std::exchange(state.fullscreenCompletion, { }))
+            completion(accepted);
+    } else if (!active) {
+        state.fullscreenRequested = false;
+        ++state.fullscreenRequest;
+        if (auto completion = std::exchange(state.fullscreenCompletion, { }))
+            completion(false);
+        if (RefPtr document = view->frame->document())
+            document->fullscreen().fullyExitFullscreen();
+    }
+    state.needsRenderingUpdate = true;
+    return SWV_OK;
+#else
+    return SWV_UNSUPPORTED;
+#endif
+}
+
+extern "C" int32_t scarlet_webview_exit_fullscreen(ScarletWebView* view)
+{
+    auto status = viewStatus(view);
+    if (status != SWV_OK) return status;
+#if ENABLE(FULLSCREEN_API)
+    auto& state = view->loadState;
+    if (auto completion = std::exchange(state.fullscreenCompletion, { }))
+        completion(false);
+    if (RefPtr document = view->frame->document())
+        document->fullscreen().fullyExitFullscreen();
+    state.fullscreenRequested = false;
+    ++state.fullscreenRequest;
+    state.needsRenderingUpdate = true;
+    return SWV_OK;
+#else
+    return SWV_UNSUPPORTED;
+#endif
 }
 
 extern "C" int32_t scarlet_webview_destroy(ScarletWebView* view)
@@ -942,6 +1007,10 @@ extern "C" int32_t scarlet_webview_destroy(ScarletWebView* view)
         return status;
 #if USE(COORDINATED_GRAPHICS)
     discardPendingGpuFrame(*view);
+#endif
+#if ENABLE(FULLSCREEN_API)
+    if (auto completion = std::exchange(view->loadState.fullscreenCompletion, { }))
+        completion(false);
 #endif
     traceTeardown("before-stop-loaders");
     view->frame->loader().stopAllLoaders();
