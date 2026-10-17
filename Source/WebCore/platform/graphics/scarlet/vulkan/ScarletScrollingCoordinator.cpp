@@ -85,6 +85,12 @@ bool ScarletScrollInput::dispatch(const PlatformWheelEvent& event, uint64_t epoc
             return;
         }
         auto result = tree->handleWheelEvent(event, steps);
+        // A scroll update has queued an owner rendering update. Mark that
+        // request here as well: a busy owner cannot acknowledge its RunLoop
+        // task yet. WebKit's normal display-tick timeout can then desynchronize
+        // layer positions without waiting for script to finish.
+        if (result.wasHandled)
+            tree->didScheduleRenderingUpdate();
         if (result.needsMainThreadProcessing())
             self->dispatchDOM(event, result.steps, epoch);
         else
