@@ -52,7 +52,19 @@ void ScarletScrollInput::invalidate()
 }
 void ScarletScrollInput::dispatchDOM(const PlatformWheelEvent& event, OptionSet<WheelEventProcessingSteps> steps, uint64_t epoch)
 {
-    m_owner.dispatch([self = shared_from_this(), event, steps, epoch] {
+    RefPtr<RunLoop> owner;
+    {
+        std::lock_guard lock(m_mutex);
+        if (!m_live || m_epoch != epoch) {
+            --m_pending;
+            return;
+        }
+        // The endpoint can outlive its owner thread. Retain the run loop
+        // before dropping the live-state lock, then post without that lock:
+        // the run-loop wake callback may acquire the UI mailbox mutex.
+        owner = &m_owner;
+    }
+    owner->dispatch([self = shared_from_this(), event, steps, epoch] {
         if (self->isCurrent(epoch) && self->m_dispatchDOM)
             self->m_dispatchDOM(event, steps);
         --self->m_pending;
