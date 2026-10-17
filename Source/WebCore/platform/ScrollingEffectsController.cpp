@@ -306,7 +306,9 @@ bool ScrollingEffectsController::processWheelEventForKineticScrolling(const Plat
         kineticAnimation->stop();
     }
 
-    if (!event.hasPreciseScrollingDeltas()) {
+    // Pixel-wheel events without gesture phases cannot terminate a kinetic
+    // history. Treat them as immediate input, preserving their pixel deltas.
+    if (!event.hasPreciseScrollingDeltas() || event.isNonGestureEvent()) {
         m_scrollHistory.clear();
         m_previousKineticAnimationInfo.initialVelocity = FloatSize();
         return false;
@@ -376,7 +378,7 @@ void ScrollingEffectsController::adjustDeltaForSnappingIfNeeded(float& deltaX, f
 void ScrollingEffectsController::updateGestureInProgressState(const PlatformWheelEvent& wheelEvent)
 {
 #if ENABLE(KINETIC_SCROLLING)
-    m_inScrollGesture = wheelEvent.hasPreciseScrollingDeltas() && !wheelEvent.isEndOfNonMomentumScroll() && !wheelEvent.isTransitioningToMomentumScroll();
+    m_inScrollGesture = wheelEvent.hasPreciseScrollingDeltas() && wheelEvent.isGestureEvent() && !wheelEvent.isEndOfNonMomentumScroll() && !wheelEvent.isTransitioningToMomentumScroll();
 #else
     UNUSED_PARAM(wheelEvent);
 #endif
