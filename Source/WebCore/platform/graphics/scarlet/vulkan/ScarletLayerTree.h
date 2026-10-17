@@ -17,6 +17,7 @@
 #include <mutex>
 #include <wtf/Condition.h>
 #include <wtf/HashSet.h>
+#include <wtf/HashMap.h>
 #include <wtf/Lock.h>
 #include <wtf/MonotonicTime.h>
 #include <wtf/RunLoop.h>
@@ -111,6 +112,7 @@ private:
     MonotonicTime m_nextFrame;
     std::unique_ptr<Scene> m_scene; // Only the compositor accesses its contents.
     HashSet<Ref<CoordinatedPlatformLayer>> m_layers; // Owner only.
+    HashMap<uint64_t, Ref<CoordinatedImageBackingStore>> m_imageBackingStores; // Owner only.
     RefPtr<GraphicsLayer> m_rootLayer, m_overlayLayer;
     mutable std::mutex m_commitMutex;
     Vector<Ref<CoordinatedPlatformLayer>> m_pendingLayers, m_removedLayers;

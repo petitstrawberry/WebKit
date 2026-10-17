@@ -262,7 +262,11 @@ void ScarletLayerTree::detachLayer(CoordinatedPlatformLayer& layer)
 Ref<CoordinatedImageBackingStore> ScarletLayerTree::imageBackingStore(Ref<NativeImage>&& image)
 {
     assertIsOwner();
-    return CoordinatedImageBackingStore::create(WTF::move(image), m_paintingEngine->threadSafeGrContext());
+    auto imageID = image->uniqueID();
+    auto result = m_imageBackingStores.ensure(imageID, [&] {
+        return CoordinatedImageBackingStore::create(WTF::move(image), m_paintingEngine->threadSafeGrContext());
+    });
+    return result.iterator->value;
 }
 bool ScarletLayerTree::needsComposition() const
 {
@@ -338,6 +342,9 @@ bool ScarletLayerTree::flush(LocalFrameView& frameView)
     if (m_detached || frameView.needsLayout()) return false;
     auto layers = layersSnapshot();
     for (const auto& layer : layers) layer->flushPendingState();
+    // Match LayerTreeHost: share native-image uploads across layers and eject
+    // stores as soon as this map is their only remaining owner.
+    m_imageBackingStores.removeIf([](auto& entry) { return entry.value->hasOneRef(); });
     Vector<Ref<CoordinatedPlatformLayer>> roots;
     if (m_rootLayer) roots.append(downcast<GraphicsLayerCoordinated>(*m_rootLayer).coordinatedPlatformLayer());
     if (m_overlayLayer) roots.append(downcast<GraphicsLayerCoordinated>(*m_overlayLayer).coordinatedPlatformLayer());
@@ -585,6 +592,7 @@ void ScarletLayerTree::detach()
     m_removedLayers.clear();
     m_rootLayer = nullptr;
     m_overlayLayer = nullptr;
+    m_imageBackingStores.clear();
     m_paintingEngine = nullptr;
 }
 }
