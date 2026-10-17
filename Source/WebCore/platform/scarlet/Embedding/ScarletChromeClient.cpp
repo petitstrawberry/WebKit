@@ -49,6 +49,7 @@
 #include "ScarletFrameLoaderClient.h"
 #if USE(COORDINATED_GRAPHICS)
 #include "ScarletLayerTree.h"
+#include "ScarletScrollingCoordinator.h"
 #endif
 #include "SearchPopupMenu.h"
 #include "TextIndicator.h"
@@ -363,6 +364,7 @@ private:
 #if USE(COORDINATED_GRAPHICS)
     bool allowsAcceleratedCompositing() const final { return true; }
     CompositingTriggerFlags allowedCompositingTriggers() const final { return static_cast<CompositingTriggerFlags>(AllTriggers); }
+    RefPtr<ScrollingCoordinator> createScrollingCoordinator(Page& page) const final { return ScarletScrollingCoordinator::create(page, m_layerTree); }
     GraphicsLayerFactory* graphicsLayerFactory() const final { return m_layerTree.factory(); }
     void attachRootGraphicsLayer(LocalFrame&, GraphicsLayer* layer) final { m_layerTree.setRootLayer(layer); }
     void attachViewOverlayGraphicsLayer(GraphicsLayer* layer) final { m_layerTree.setOverlayLayer(layer); }

@@ -154,6 +154,9 @@ int32_t scarlet_webview_gpu_frame_readback(ScarletWebView*, uint64_t generation,
 int32_t scarlet_webview_state(ScarletWebView*, SWVState*);
 int32_t scarlet_webview_mouse(ScarletWebView*, const SWVMouseEvent*, uint32_t* handled);
 int32_t scarlet_webview_wheel(ScarletWebView*, const SWVWheelEvent*, uint32_t* handled);
+/* Any-thread wheel dispatch, CSS coordinates. Rejected epochs/viewports fall back
+ * to the owner queue. The endpoint remains safe after its Page is destroyed. */
+int32_t scarlet_webview_output_wheel(SWVCompositorOutput*, const SWVWheelEvent*, uint64_t epoch, uint32_t width, uint32_t height, double scale);
 int32_t scarlet_webview_key(ScarletWebView*, const SWVKeyEvent*, uint32_t* handled);
 int32_t scarlet_webview_poll_request(ScarletWebView*, SWVRequest*); /* SWV_EMPTY: no pending request. */
 int32_t scarlet_webview_complete_request(ScarletWebView*, const SWVResponse*);

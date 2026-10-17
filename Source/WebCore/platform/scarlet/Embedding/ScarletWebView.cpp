@@ -122,6 +122,7 @@ struct ScarletWebView {
     // ChromeClient borrows this tree. It must outlive Page and its GraphicsLayers,
     // including failure unwinding before the explicit destroy ABI is reached.
     std::unique_ptr<ScarletLayerTree> layerTree;
+    std::shared_ptr<ScarletScrollInput> scrollInput;
 #endif
     RefPtr<Page> page;
     RefPtr<LocalFrame> frame;
@@ -863,6 +864,13 @@ extern "C" int32_t scarlet_webview_create(const SWVConfiguration* configuration,
     });
     if (!view->layerTree)
         return SWV_FAILED;
+    view->scrollInput = std::make_shared<ScarletScrollInput>([view = view.get()](const PlatformWheelEvent& event, OptionSet<WheelEventProcessingSteps> steps) {
+        view->loadState.needsPaint = true;
+        view->frame->eventHandler().handleWheelEvent(event, steps);
+    }, [output = std::weak_ptr<ScarletLayerTree::Output>(view->layerTree->output())] {
+        if (auto live = output.lock()) live->notify();
+    });
+    view->layerTree->setScrollInput(view->scrollInput);
     view->layerTree->setViewport(cssSize(*view), static_cast<float>(view->scale), { static_cast<int>(view->width), static_cast<int>(view->height) });
     pageConfiguration.chromeClient = createScarletChromeClient(view->loadState, *view->layerTree);
 #else
@@ -896,7 +904,9 @@ extern "C" int32_t scarlet_webview_create(const SWVConfiguration* configuration,
     settings.setAcceleratedCompositingEnabled(true);
     settings.setForceCompositingMode(true);
     settings.setAcceleratedCompositingForFixedPositionEnabled(true);
-    // Split scroll contents into retained layers; input remains on the owner thread.
+    settings.setScrollingCoordinatorEnabled(true);
+    settings.setAsyncFrameScrollingEnabled(true);
+    // Standard scrolling nodes retain frame, overflow, fixed and sticky layers.
     settings.setAsyncOverflowScrollingEnabled(true);
 #else
     settings.setAcceleratedCompositingEnabled(false);
@@ -1291,6 +1301,7 @@ extern "C" int32_t scarlet_webview_pixels(ScarletWebView* view, SWVPixels* out)
 struct SWVCompositorOutput {
 #if USE(COORDINATED_GRAPHICS)
     std::shared_ptr<ScarletLayerTree::Output> output;
+    std::shared_ptr<ScarletScrollInput> scrollInput;
 #endif
 };
 extern "C" int32_t scarlet_webview_compositor_output(ScarletWebView* view, SWVCompositorOutput** out)
@@ -1300,7 +1311,7 @@ extern "C" int32_t scarlet_webview_compositor_output(ScarletWebView* view, SWVCo
     if (!out) return SWV_INVALID_ARGUMENT;
     *out = nullptr;
 #if USE(COORDINATED_GRAPHICS)
-    *out = new SWVCompositorOutput { view->layerTree->output() };
+    *out = new SWVCompositorOutput { view->layerTree->output(), view->scrollInput };
     return SWV_OK;
 #else
     return SWV_UNSUPPORTED;
@@ -1532,6 +1543,24 @@ public:
         m_hasPreciseScrollingDeltas = true;
     }
 };
+}
+
+extern "C" int32_t scarlet_webview_output_wheel(SWVCompositorOutput* output, const SWVWheelEvent* input, uint64_t epoch, uint32_t width, uint32_t height, double scale)
+{
+    if (!output || !input || !validModifiers(input->modifiers) || !std::isfinite(input->x) || !std::isfinite(input->y)
+        || !std::isfinite(input->delta_x) || !std::isfinite(input->delta_y)
+        || !std::isfinite(input->global_x) || !std::isfinite(input->global_y)
+        || std::abs(input->x) > 1000000 || std::abs(input->y) > 1000000
+        || std::abs(input->global_x) > 1000000 || std::abs(input->global_y) > 1000000
+        || std::abs(input->delta_x) > 1000000 || std::abs(input->delta_y) > 1000000
+        || !width || !height || width > INT_MAX || height > INT_MAX || !std::isfinite(scale) || scale <= 0)
+        return SWV_INVALID_ARGUMENT;
+#if USE(COORDINATED_GRAPHICS)
+    return output->scrollInput->dispatch(ScarletWheelEvent { *input, 1 }, epoch,
+        { static_cast<int>(width), static_cast<int>(height) }, scale) ? SWV_OK : SWV_STALE_REQUEST;
+#else
+    return SWV_UNSUPPORTED;
+#endif
 }
 
 extern "C" int32_t scarlet_webview_wheel(ScarletWebView* view, const SWVWheelEvent* input, uint32_t* handled)

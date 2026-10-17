@@ -10,6 +10,7 @@
 #include "GraphicsLayer.h"
 #include "IntSize.h"
 #include "IntRect.h"
+#include "ScarletScrollingCoordinator.h"
 #include <array>
 #include <atomic>
 #include <memory>
@@ -51,6 +52,7 @@ public:
         uint64_t generation() const;
         struct Statistics { uint64_t paints { 0 }, pixels { 0 }; };
         Statistics statistics() const;
+        void notify();
     private:
         friend class ScarletLayerTree;
         struct Slot { Frame frame; bool leased { false }, ready { false }, reserved { false }; };
@@ -61,11 +63,12 @@ public:
         Statistics counters;
         IntRect unacquiredDamage;
         std::function<void()> wake;
-        void notify();
     };
     static std::unique_ptr<ScarletLayerTree> create(Function<void()>&& scheduleRenderingUpdate);
     ~ScarletLayerTree();
     GraphicsLayerFactory* factory() { return this; }
+    void setScrollInput(std::shared_ptr<ScarletScrollInput> input) { m_scrollInput = WTF::move(input); }
+    void setScrollingTree(Ref<ScrollingTreeCoordinated>&&);
     void setRootLayer(GraphicsLayer*);
     void setOverlayLayer(GraphicsLayer*);
     int maximumTextureSize() const { return m_maxTextureSize; }
@@ -102,6 +105,8 @@ private:
     void didPaintTile() override;
     void didPaintTile(const IntRect&) override;
 
+    std::shared_ptr<ScarletScrollInput> m_scrollInput;
+    RefPtr<ScrollingTreeCoordinated> m_scrollingTree; // Published before any scene commit.
     Function<void()> m_scheduleRenderingUpdate;
     RunLoop& m_ownerRunLoop;
     Ref<WorkQueue> m_workQueue;

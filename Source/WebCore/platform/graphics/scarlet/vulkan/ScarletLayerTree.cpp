@@ -193,6 +193,12 @@ Vector<Ref<CoordinatedPlatformLayer>> ScarletLayerTree::layersSnapshot() const
     for (const auto& layer : m_layers) result.append(layer.copyRef());
     return result;
 }
+void ScarletLayerTree::setScrollingTree(Ref<ScrollingTreeCoordinated>&& tree)
+{
+    assertIsOwner();
+    m_scrollInput->setTree(tree.copyRef());
+    m_workQueue->dispatchSync([&] { m_scrollingTree = WTF::move(tree); });
+}
 void ScarletLayerTree::setRootLayer(GraphicsLayer* layer)
 {
     assertIsOwner();
@@ -211,6 +217,7 @@ void ScarletLayerTree::setOverlayLayer(GraphicsLayer* layer)
 }
 void ScarletLayerTree::setViewport(const IntSize& size, float scale, const IntSize& deviceSize)
 {
+    m_scrollInput->setViewport(deviceSize, scale);
     assertIsOwner();
     RELEASE_ASSERT(std::isfinite(scale) && scale > 0 && !size.isEmpty());
     if (m_cssViewport == size && m_deviceScale == scale && m_deviceViewport == deviceSize) return;
@@ -222,6 +229,7 @@ void ScarletLayerTree::setViewport(const IntSize& size, float scale, const IntSi
 }
 void ScarletLayerTree::setOutputEpoch(uint64_t epoch)
 {
+    m_scrollInput->setEpoch(epoch);
     assertIsOwner();
     std::lock_guard lock(m_commitMutex);
     m_epoch = epoch;
@@ -386,7 +394,7 @@ bool ScarletLayerTree::commit()
     auto& scene = *m_scene;
     for (const auto& layer : removed) layer->invalidateTarget();
     scene.layers = WTF::move(layers);
-    OptionSet<CompositionReason> reasons { CompositionReason::RenderingUpdate, CompositionReason::VideoFrame, CompositionReason::Animation };
+    OptionSet<CompositionReason> reasons { CompositionReason::RenderingUpdate, CompositionReason::VideoFrame, CompositionReason::Animation, CompositionReason::AsyncScrolling };
     for (const auto& layer : scene.layers) layer->flushPositionChanges(reasons);
     for (const auto& layer : scene.layers) layer->flushCompositingState(reasons);
     for (const auto& layer : scene.layers)
@@ -409,6 +417,8 @@ bool ScarletLayerTree::commit()
     scene.size = size;
     scene.scale = deviceScale;
     scene.epoch = epoch;
+    if (m_scrollingTree)
+        m_ownerRunLoop.dispatch([tree = Ref { *m_scrollingTree }] { tree->didCompletePlatformRenderingUpdate(); });
     return true;
 }
 void ScarletLayerTree::render()
@@ -416,6 +426,13 @@ void ScarletLayerTree::render()
     RELEASE_ASSERT(!isMainThread());
     if (m_detached || !m_scene) return;
     auto& scene = *m_scene;
+    if (m_scrollingTree) {
+        m_scrollingTree->displayDidRefresh(m_scrollingTree->displayID());
+        // WebKit needs display ticks even with no page damage: the owner may
+        // be executing script while the scrolling thread advances its layers.
+        if (m_scrollingTree->hasRecentActivity())
+            m_timer.startOneShot(Seconds { 1.0 / 60 });
+    }
     auto device = PlatformDisplay::sharedDisplay().skiaVulkanContext();
     if (!device) return;
     if (scene.submission) {
@@ -458,7 +475,8 @@ void ScarletLayerTree::render()
         m_timer.startOneShot(m_nextFrame - now);
         return;
     }
-    OptionSet<CompositionReason> reasons { CompositionReason::VideoFrame, CompositionReason::Animation };
+    OptionSet<CompositionReason> reasons { CompositionReason::VideoFrame, CompositionReason::Animation, CompositionReason::AsyncScrolling };
+    for (const auto& layer : scene.layers) layer->flushPositionChanges(reasons);
     for (const auto& layer : scene.layers) layer->flushCompositingState(reasons);
     unsigned index = Output::slotCount;
     {
@@ -567,9 +585,11 @@ void ScarletLayerTree::detach()
 {
     assertIsOwner();
     if (m_detached.exchange(true)) return;
+    if (m_scrollInput) m_scrollInput->invalidate();
     waitUntilPaintingComplete();
     m_workQueue->dispatchSync([this] {
         m_timer.stop();
+        m_scrollingTree = nullptr;
         if (m_scene) {
             m_scene->submission = nullptr;
             m_scene->callbacks.clear();

@@ -62,7 +62,7 @@ list(APPEND WebCore_SOURCES
 list(REMOVE_ITEM WebCore_SOURCES platform/network/curl/DNSResolveQueueCurl.cpp)
 list(APPEND WebCore_SOURCES platform/network/scarlet/DNSResolveQueueScarletOffline.cpp)
 
-# The native compositor shares the WebCore owner thread and Ganesh context.
+# The retained scene has its own compositor and the standard WebCore scrolling thread.
 if (SCARLET_USE_COORDINATED_COMPOSITOR)
     include(platform/CoordinatedGraphics.cmake)
     list(APPEND WebCore_PRIVATE_INCLUDE_DIRECTORIES
@@ -70,6 +70,7 @@ if (SCARLET_USE_COORDINATED_COMPOSITOR)
     list(APPEND WebCore_SOURCES
         platform/graphics/texmap/TextureMapperAnimation.cpp
         platform/graphics/scarlet/vulkan/ScarletLayerTree.cpp
+        platform/graphics/scarlet/vulkan/ScarletScrollingCoordinator.cpp
         platform/graphics/skia/SkiaBackingStore.cpp
         platform/graphics/skia/SkiaCompositingLayer.cpp
         platform/graphics/skia/SkiaCompositingLayer3DRenderingContext.cpp
@@ -81,7 +82,8 @@ if (SCARLET_USE_COORDINATED_COMPOSITOR)
         platform/graphics/skia/SkiaReplayAtlas.cpp
         platform/graphics/skia/SkiaReplayCanvas.cpp)
     list(APPEND WebCore_PRIVATE_FRAMEWORK_HEADERS
-        platform/graphics/scarlet/vulkan/ScarletLayerTree.h)
+        platform/graphics/scarlet/vulkan/ScarletLayerTree.h
+        platform/graphics/scarlet/vulkan/ScarletScrollingCoordinator.h)
 else ()
     list(APPEND WebCore_SOURCES platform/graphics/scarlet/GraphicsLayerScarlet.cpp)
 endif ()
