@@ -346,7 +346,9 @@ public:
 
     Vector<String> supportedRobustnesses() const final
     {
-        return { emptyString(), "SW_SECURE_CRYPTO"_s, "SW_SECURE_DECODE"_s };
+        // Only advertise the decrypt-only L3 path. Decode inside the CDM and
+        // hardware-protected output are not implemented by this port.
+        return { emptyString(), "SW_SECURE_CRYPTO"_s };
     }
 
     CDMRequirement distinctiveIdentifiersRequirement(const CDMKeySystemConfiguration&, const CDMRestrictions&) const final
