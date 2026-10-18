@@ -205,6 +205,10 @@ public:
     }
     void remove(const String& id)
     {
+        // closeSession clears the id before MediaKeySession later clears its
+        // client. A null String is not a valid key in WTF::HashMap.
+        if (id.isEmpty())
+            return;
         m_clients.remove(id);
         if (m_clients.isEmpty())
             m_timer.stop();
