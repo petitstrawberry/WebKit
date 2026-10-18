@@ -923,6 +923,7 @@ extern "C" int32_t scarlet_webview_create(const SWVConfiguration* configuration,
 #if ENABLE(VIDEO)
     #if USE(SCARLET_MEDIA)
     settings.setMediaEnabled(true);
+    settings.setMediaCapabilitiesEnabled(true);
     settings.setRequestVideoFrameCallbackEnabled(true);
 #else
     settings.setMediaEnabled(false);
