@@ -222,21 +222,23 @@ private:
         if (m_pending)
             return;
         m_pending = true;
-        m_connection->dispatch([completion = [protectedThis = Ref { *this }](Vector<ScarletWidevineBuffer>&& events) mutable {
+        m_connection->dispatch([completion = [protectedThis = Ref { *this }](bool failed, Vector<ScarletWidevineBuffer>&& events) mutable {
             protectedThis->m_pending = false;
+            if (failed) protectedThis->m_timer.stop();
             for (auto buffer : events) {
                 auto release = makeScopeExit([&] { cdm_host_buffer_free(buffer); });
                 protectedThis->deliver(buffer);
             }
         }](ScarletCDMConnection& connection) mutable {
             Vector<ScarletWidevineBuffer> events;
+            bool failed = false;
             for (unsigned count = 0; count < 64; ++count) {
                 ScarletWidevineBuffer buffer { nullptr, 0 };
-                if (!connection.handle() || cdm_host_take_event(connection.handle(), &buffer) <= 0)
-                    break;
+                auto result = connection.handle() ? cdm_host_take_event(connection.handle(), &buffer) : SCARLET_WIDEVINE_ERROR;
+                if (result <= 0) { failed = result < 0; break; }
                 events.append(buffer);
             }
-            connection.reply([completion = WTF::move(completion), events = WTF::move(events)]() mutable { completion(WTF::move(events)); });
+            connection.reply([completion = WTF::move(completion), failed, events = WTF::move(events)]() mutable { completion(failed, WTF::move(events)); });
         });
     }
     void deliver(const ScarletWidevineBuffer& buffer)
