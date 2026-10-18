@@ -894,6 +894,9 @@ extern "C" int32_t scarlet_webview_create(const SWVConfiguration* configuration,
     provideScarletMediaKeySystemTo(*view->page);
 #endif
     auto& settings = view->page->settings();
+#if ENABLE(ENCRYPTED_MEDIA)
+    settings.setEncryptedMediaAPIEnabled(true);
+#endif
     settings.setScriptEnabled(configuration->script_enabled);
     settings.setImagesEnabled(true);
     settings.setLoadsImagesAutomatically(true);
