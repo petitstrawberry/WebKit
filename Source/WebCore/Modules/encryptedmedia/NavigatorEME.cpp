@@ -32,6 +32,8 @@
 #if ENABLE(ENCRYPTED_MEDIA)
 
 #include "CDM.h"
+#include <cstdio>
+#include <cstdlib>
 #include "CDMLogging.h"
 #include "Document.h"
 #include "JSDOMConvertInterface.h"
@@ -87,6 +89,18 @@ void NavigatorEME::requestMediaKeySystemAccess(Navigator& navigator, Document& d
     Ref<Logger> logger = document.logger();
 
     infoLog(logger, identifier, "keySystem(", keySystem, "), supportedConfigurations(", supportedConfigurations, ")");
+
+    if (std::getenv("SCARLET_WEBVIEW_PROFILE")) {
+        for (auto& configuration : supportedConfigurations) {
+            std::fprintf(stderr, "SCARLET_EME_REQUEST keySystem=%s identifier=%u persistent=%u sessions=%zu\n", keySystem.utf8().data(), static_cast<unsigned>(configuration.distinctiveIdentifier), static_cast<unsigned>(configuration.persistentState), configuration.sessionTypes.size());
+            for (auto& type : configuration.initDataTypes)
+                std::fprintf(stderr, "SCARLET_EME_INIT_TYPE type=%s\n", type.utf8().data());
+            for (auto& capability : configuration.videoCapabilities)
+                std::fprintf(stderr, "SCARLET_EME_VIDEO type=%s robustness=%s scheme=%d\n", capability.contentType.utf8().data(), capability.robustness.utf8().data(), capability.encryptionScheme ? static_cast<int>(*capability.encryptionScheme) : -1);
+            for (auto& capability : configuration.audioCapabilities)
+                std::fprintf(stderr, "SCARLET_EME_AUDIO type=%s robustness=%s scheme=%d\n", capability.contentType.utf8().data(), capability.robustness.utf8().data(), capability.encryptionScheme ? static_cast<int>(*capability.encryptionScheme) : -1);
+        }
+    }
 
     // When this method is invoked, the user agent must run the following steps:
     // 1. If keySystem is the empty string, return a promise rejected with a newly created TypeError.
