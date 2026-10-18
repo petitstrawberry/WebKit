@@ -24,8 +24,6 @@
  */
 
 #include "config.h"
-#include <cstdio>
-#include <cstdlib>
 #include "SkiaBackingStore.h"
 
 #if USE(COORDINATED_GRAPHICS) && USE(SKIA) && !USE(TEXTURE_MAPPER)
@@ -316,13 +314,6 @@ void SkiaBackingStore::Tile::update(const IntRect& dirtyRect, const IntRect& til
             }
 
             skgpu::ganesh::DrawDDL(m_surface.get(), displayList);
-#if PLATFORM(SCARLET)
-            if (std::getenv("SCARLET_CANVAS_SOURCE_TRACE") && tileRect.contains(IntPoint { 200, 200 })) {
-                uint32_t pixel = 0;
-                bool read = m_surface->readPixels(SkImageInfo::MakeN32Premul(1, 1), &pixel, 4, 200 - tileRect.x(), 200 - tileRect.y());
-                std::fprintf(stderr, "SCARLET_CANVAS_TILE read=%u color=%08x rect=%d,%d,%d,%d dirty=%d,%d,%d,%d\n", read, pixel, tileRect.x(), tileRect.y(), tileRect.width(), tileRect.height(), dirtyRect.x(), dirtyRect.y(), dirtyRect.width(), dirtyRect.height());
-            }
-#endif
         }
     } else {
 #if PLATFORM(SCARLET)

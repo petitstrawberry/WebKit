@@ -1548,11 +1548,13 @@ void CoordinatedPlatformLayer::flushCompositingStateOnTarget(const OptionSet<Com
 
     if (reasons.containsAny({ CompositionReason::RenderingUpdate, CompositionReason::VideoFrame, CompositionReason::AsyncScrolling })) {
 #if ENABLE(DAMAGE_TRACKING)
-        // DOM/tile damage belongs to its RenderingUpdate commit. Video may
-        // compose the retained scene while those tiles are still recording.
+        // DOM/tile damage belongs to its RenderingUpdate commit. Video and
+        // async scrolling may compose the retained scene while those tiles
+        // are still recording. Position updates damage the target directly;
+        // they must not consume pending DOM damage before the tiles arrive.
         if (m_pendingChanges.contains(Change::Damage)
 #if PLATFORM(SCARLET)
-            && reasons.containsAny({ CompositionReason::RenderingUpdate, CompositionReason::AsyncScrolling })
+            && reasons.contains(CompositionReason::RenderingUpdate)
 #endif
         ) {
             ASSERT(m_damage.has_value());

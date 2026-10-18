@@ -24,8 +24,6 @@
  */
 
 #include "config.h"
-#include <cstdio>
-#include <cstdlib>
 #include "GraphicsContextSkia.h"
 
 #if USE(SKIA)
@@ -289,13 +287,6 @@ void GraphicsContextSkia::drawNativeImage(const NativeImage& nativeImage, const 
     auto image = nativeImage.platformImage();
     if (!image)
         return;
-#if PLATFORM(SCARLET)
-    if (std::getenv("SCARLET_CANVAS_SOURCE_TRACE") && !image->isTextureBacked() && image->width() == 324 && image->height() == 324) {
-        SkPixmap pixels;
-        if (image->peekPixels(&pixels))
-            std::fprintf(stderr, "SCARLET_CANVAS_SOURCE id=%u color=%08x recording=%u\n", image->uniqueID(), pixels.getColor(0, 0), static_cast<unsigned>(m_contextMode));
-    }
-#endif
 
     // Collect raster images for atlas batching during recording.
     if (m_contextMode == ContextMode::TileRecordingMode && m_renderingMode == RenderingMode::Accelerated && !image->isTextureBacked()) {
