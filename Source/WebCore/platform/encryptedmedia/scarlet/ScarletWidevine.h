@@ -72,6 +72,7 @@ enum {
 ScarletWidevineHandle* cdm_host_create(ScarletWidevineBytes host_path, ScarletWidevineBytes cdm_path, ScarletWidevineBytes ld_path, uint32_t slot_count, uint32_t slot_size);
 void cdm_host_destroy(ScarletWidevineHandle*);
 int32_t cdm_host_initialize(ScarletWidevineHandle*, uint32_t allow_distinctive_identifier, uint32_t allow_persistent_state, uint32_t use_hw_secure_codecs);
+int32_t cdm_host_set_server_certificate(ScarletWidevineHandle*, ScarletWidevineBytes certificate);
 /* out_message_type receives the CDM message type of out_message. */
 int32_t cdm_host_create_session(ScarletWidevineHandle*, ScarletWidevineBytes init_data, uint32_t session_type, uint32_t init_data_type, uint32_t* out_message_type, ScarletWidevineBuffer* out_session_id, ScarletWidevineBuffer* out_message);
 /* out_keys is packed as count, then per key: size, key id, status. */

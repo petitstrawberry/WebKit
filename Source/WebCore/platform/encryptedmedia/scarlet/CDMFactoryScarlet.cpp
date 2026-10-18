@@ -401,7 +401,13 @@ public:
             });
         });
     }
-    void setServerCertificate(Ref<SharedBuffer>&&, SuccessCallback&& callback) final { callback(SuccessValue::Failed); }
+    void setServerCertificate(Ref<SharedBuffer>&& certificate, SuccessCallback&& callback) final
+    {
+        m_connection->dispatch([certificate = WTF::move(certificate), callback = WTF::move(callback)](ScarletCDMConnection& connection) mutable {
+            bool success = connection.handle() && cdm_host_set_server_certificate(connection.handle(), toBytes(certificate->span())) == SCARLET_WIDEVINE_OK;
+            connection.reply([success, callback = WTF::move(callback)]() mutable { callback(success ? SuccessValue::Succeeded : SuccessValue::Failed); });
+        });
+    }
     void setStorageDirectory(const String&) final { }
     const String& keySystem() const final { return m_keySystem; }
     RefPtr<CDMInstanceSession> createSession() final { return CDMInstanceSessionScarlet::create(m_connection.get(), m_events.get()); }
@@ -485,7 +491,7 @@ public:
 
     void loadAndInitialize() final { }
 
-    bool supportsServerCertificates() const final { return false; }
+    bool supportsServerCertificates() const final { return true; }
 
     bool supportsSessions() const final { return true; }
 
