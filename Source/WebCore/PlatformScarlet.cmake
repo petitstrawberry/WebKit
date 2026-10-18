@@ -18,6 +18,11 @@ include(platform/ImageDecoders.cmake)
 include(platform/OpenSSL.cmake)
 include(platform/Curl.cmake)
 
+if (ENABLE_ENCRYPTED_MEDIA)
+    list(APPEND WebCore_SOURCES platform/encryptedmedia/scarlet/CDMFactoryScarlet.cpp)
+    list(APPEND WebCore_PRIVATE_INCLUDE_DIRECTORIES ${WEBCORE_DIR}/platform/encryptedmedia/scarlet)
+endif ()
+
 list(APPEND WebCore_PRIVATE_INCLUDE_DIRECTORIES
     ${WEBCORE_DIR}/platform/generic
     ${WEBCORE_DIR}/platform/scarlet

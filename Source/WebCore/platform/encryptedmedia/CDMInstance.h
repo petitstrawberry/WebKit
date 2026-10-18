@@ -101,6 +101,9 @@ public:
         ClearKey,
         FairPlayStreaming,
         Remote,
+#if PLATFORM(SCARLET)
+        Scarlet,
+#endif
 #if ENABLE(THUNDER)
         Thunder,
 #endif

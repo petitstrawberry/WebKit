@@ -10,6 +10,9 @@
 #include "ScarletBackForwardClient.h"
 #include "ScarletFrameLoaderClient.h"
 #include "ScarletStorage.h"
+#if ENABLE(ENCRYPTED_MEDIA)
+#include "ScarletWidevine.h"
+#endif
 #include "DatabaseProvider.h"
 #include <JavaScriptCore/JSLock.h>
 #include "CookieJar.h"
@@ -887,6 +890,9 @@ extern "C" int32_t scarlet_webview_create(const SWVConfiguration* configuration,
         return makeUniqueRefWithoutRefCountedCheck<ScarletFrameLoaderClient>(frame, loader, *state);
     };
     view->page = Page::create(WTF::move(pageConfiguration));
+#if ENABLE(ENCRYPTED_MEDIA)
+    provideScarletMediaKeySystemTo(*view->page);
+#endif
     auto& settings = view->page->settings();
     settings.setScriptEnabled(configuration->script_enabled);
     settings.setImagesEnabled(true);

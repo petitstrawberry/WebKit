@@ -61,7 +61,7 @@ void CDMFactory::unregisterFactory(CDMFactory& factory)
     registeredFactories().removeAllMatching([&](auto& item) { return item.ptr() == &factory; });
 }
 
-#if !USE(GSTREAMER) && !USE(AVFOUNDATION)
+#if !USE(GSTREAMER) && !USE(AVFOUNDATION) && !PLATFORM(SCARLET)
 void CDMFactory::platformRegisterFactories(Vector<WeakRef<CDMFactory>>&)
 {
 }

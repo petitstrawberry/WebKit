@@ -80,7 +80,7 @@ RefPtr<CDMProxy> CDMProxyFactory::createCDMProxyForKeySystem(const String& keySy
     return cdmProxy;
 }
 
-#if !USE(GSTREAMER)
+#if !USE(GSTREAMER) && !PLATFORM(SCARLET)
 Vector<CDMProxyFactory*> CDMProxyFactory::platformRegisterFactories()
 {
     Vector<CDMProxyFactory*> factories;

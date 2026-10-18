@@ -9,6 +9,8 @@
 #if ENABLE(ENCRYPTED_MEDIA)
 
 #include "CDMFactory.h"
+#include "CDMEncryptionScheme.h"
+#include "CDMMediaCapability.h"
 #include "CDMInstance.h"
 #include "CDMInstanceSession.h"
 #include "CDMKeySystemConfiguration.h"
@@ -17,22 +19,44 @@
 #include "CDMRequirement.h"
 #include "CDMRestrictions.h"
 #include "CDMSessionType.h"
+#include "MediaKeySystemClient.h"
+#include "MediaKeySystemRequest.h"
 #include "SharedBuffer.h"
 #include <cstdlib>
 #include <span>
 #include <wtf/NeverDestroyed.h>
 #include <wtf/TZoneMallocInlines.h>
 #include <wtf/WeakPtr.h>
+#include <wtf/RunLoop.h>
+#include <wtf/WorkQueue.h>
+#include <wtf/ThreadSafeRefCounted.h>
 #include <wtf/text/CString.h>
 #include <wtf/text/StringCommon.h>
 
 namespace WebCore {
 
+class ScarletMediaKeySystemClient final : public RefCounted<ScarletMediaKeySystemClient>, public MediaKeySystemClient {
+public:
+    void ref() const final { RefCounted::ref(); }
+    void deref() const final { RefCounted::deref(); }
+    void requestMediaKeySystem(MediaKeySystemRequest& request) final
+    {
+        if (request.keySystem() == "com.widevine.alpha"_s)
+            request.allow(String { });
+        else
+            request.deny("Unsupported key system"_s);
+    }
+    void cancelMediaKeySystemRequest(MediaKeySystemRequest&) final { }
+};
+
+void provideScarletMediaKeySystemTo(Page& page)
+{
+    provideMediaKeySystemTo(page, adoptRef(*new ScarletMediaKeySystemClient));
+}
+
 namespace {
 
-constexpr auto keySystemClearKeyName = ""_s;
-
-ScarletWidevineBytes toBytes(const CString& text)
+ScarletWidevineBytes toBytes(const UTF8CString& text)
 {
     return { reinterpret_cast<const uint8_t*>(text.data()), text.length() };
 }
@@ -47,19 +71,6 @@ String configuredPath(const char* variable, const char* fallback)
     if (const char* value = std::getenv(variable); value && *value)
         return String::fromUTF8(value);
     return String::fromUTF8(fallback);
-}
-
-uint32_t toSessionType(CDMSessionType sessionType)
-{
-    switch (sessionType) {
-    case CDMSessionType::PersistentUsageRecord:
-        return SCARLET_WIDEVINE_SESSION_PERSISTENT_USAGE_RECORD;
-    case CDMSessionType::PersistentLicense:
-        return SCARLET_WIDEVINE_SESSION_PERSISTENT_LICENSE;
-    case CDMSessionType::Temporary:
-    default:
-        return SCARLET_WIDEVINE_SESSION_TEMPORARY;
-    }
 }
 
 uint32_t toInitDataType(const String& initDataType)
@@ -117,7 +128,7 @@ CDMInstanceSession::KeyStatusVector decodeKeyStatuses(const ScarletWidevineBuffe
         uint32_t idLength = 0;
         if (!readUint32(idLength) || position + idLength > buffer.length)
             break;
-        auto keyId = SharedBuffer::create(std::span { buffer.data + position, static_cast<size_t>(idLength) });
+        auto keyId = SharedBuffer::create(std::span<const uint8_t> { buffer.data + position, static_cast<size_t>(idLength) });
         position += idLength;
         uint32_t status = 0;
         if (!readUint32(status))
@@ -129,53 +140,58 @@ CDMInstanceSession::KeyStatusVector decodeKeyStatuses(const ScarletWidevineBuffe
 
 } // namespace
 
-class CDMInstanceSessionScarlet;
-
-class CDMInstanceScarlet final : public CDMInstance, public CanMakeWeakPtr<CDMInstanceScarlet> {
-    WTF_MAKE_TZONE_ALLOCATED_INLINE(CDMInstanceScarlet);
+// All blocking process/IPC operations are serialized here, away from the Page
+// owner. Replies return to the owner loop that created this MediaKeys object.
+class ScarletCDMConnection final : public ThreadSafeRefCounted<ScarletCDMConnection> {
 public:
-    static Ref<CDMInstanceScarlet> create() { return adoptRef(*new CDMInstanceScarlet()); }
-    ~CDMInstanceScarlet() final
+    static Ref<ScarletCDMConnection> create() { return adoptRef(*new ScarletCDMConnection); }
+    ~ScarletCDMConnection()
     {
         if (m_handle)
-            scarlet_widevine_destroy(m_handle);
+            cdm_host_destroy(m_handle);
     }
 
-    ImplementationType implementationType() const final { return ImplementationType::Scarlet; }
-    void initializeWithConfiguration(const CDMKeySystemConfiguration&, AllowDistinctiveIdentifiers, AllowPersistentState, SuccessCallback&&) final;
-    void setServerCertificate(Ref<SharedBuffer>&&, SuccessCallback&& callback) final { callback(SuccessValue::Failed); }
-    void setStorageDirectory(const String&) final { }
-    const String& keySystem() const final { return m_keySystem; }
-    RefPtr<CDMInstanceSession> createSession() final;
-
-    ScarletWidevineHandle* handle()
+    void dispatch(Function<void(ScarletCDMConnection&)>&& operation)
     {
-        if (m_handle)
-            return m_handle;
-
-        auto hostPath = configuredPath("MYRICA_WIDEVINE_HOST", "/shared/widevine/widevine-host");
-        auto cdmPath = configuredPath("MYRICA_WIDEVINE_CDM", "/shared/widevine/libwidevinecdm.so");
-        auto ldPath = configuredPath("MYRICA_WIDEVINE_LD_PATH", "");
-        auto hostUtf8 = hostPath.utf8();
-        auto cdmUtf8 = cdmPath.utf8();
-        auto ldUtf8 = ldPath.utf8();
-        m_handle = scarlet_widevine_create(toBytes(hostUtf8), toBytes(cdmUtf8), toBytes(ldUtf8), 4, 1024 * 1024);
-        return m_handle;
+        m_queue->dispatch([connection = Ref { *this }, operation = WTF::move(operation)]() mutable {
+            operation(connection.get());
+        });
+    }
+    void reply(Function<void()>&& callback) { m_owner->dispatch(WTF::move(callback)); }
+    ScarletWidevineHandle* handle() const { return m_handle; }
+    bool initialize()
+    {
+        if (!m_handle)
+            m_handle = cdm_host_create(toBytes(m_hostPath), toBytes(m_cdmPath), toBytes(m_ldPath), 4, 1024 * 1024);
+        // L3, temporary sessions: never request persistent identifiers/state or
+        // hardware-secure codecs from the software CDM.
+        return m_handle && cdm_host_initialize(m_handle, 0, 0, 0) == SCARLET_WIDEVINE_OK;
     }
 
 private:
-    CDMInstanceScarlet() = default;
+    ScarletCDMConnection()
+        : m_queue(WorkQueue::create("WebCore.ScarletCDM"_s))
+        , m_owner(RunLoop::currentSingleton())
+        , m_hostPath(configuredPath("MYRICA_WIDEVINE_HOST", "/shared/widevine/widevine-host").utf8())
+        , m_cdmPath(configuredPath("MYRICA_WIDEVINE_CDM", "/shared/widevine/libwidevinecdm.so").utf8())
+        , m_ldPath(configuredPath("MYRICA_WIDEVINE_LD_PATH", "").utf8())
+    {
+    }
 
-    ScarletWidevineHandle* m_handle { nullptr };
-    String m_keySystem { "com.widevine.alpha"_s };
+    Ref<WorkQueue> m_queue;
+    Ref<RunLoop> m_owner;
+    UTF8CString m_hostPath;
+    UTF8CString m_cdmPath;
+    UTF8CString m_ldPath;
+    ScarletWidevineHandle* m_handle { nullptr }; // Accessed only by the serial queue.
 };
 
 class CDMInstanceSessionScarlet final : public CDMInstanceSession {
     WTF_MAKE_TZONE_ALLOCATED_INLINE(CDMInstanceSessionScarlet);
 public:
-    static Ref<CDMInstanceSessionScarlet> create(CDMInstanceScarlet& instance)
+    static Ref<CDMInstanceSessionScarlet> create(ScarletCDMConnection& connection)
     {
-        return adoptRef(*new CDMInstanceSessionScarlet(instance));
+        return adoptRef(*new CDMInstanceSessionScarlet(connection));
     }
 
     void setClient(WeakPtr<CDMInstanceSessionClient>&& client) final { m_client = WTF::move(client); }
@@ -183,54 +199,50 @@ public:
 
     void requestLicense(LicenseType sessionType, KeyGroupingStrategy, const String& initDataType, Ref<SharedBuffer>&& initData, LicenseCallback&& callback) final
     {
-        RefPtr<CDMInstanceScarlet> instance = m_instance.get();
-        auto* handle = instance ? instance->handle() : nullptr;
-        if (!handle) {
+        if (sessionType != LicenseType::Temporary) {
             callback(SharedBuffer::create(), emptyString(), false, Failed);
             return;
         }
-
-        uint32_t messageType = 0;
-        ScarletWidevineBuffer sessionBuffer { nullptr, 0 };
-        ScarletWidevineBuffer messageBuffer { nullptr, 0 };
-        auto initSpan = initData->span();
-        const auto status = scarlet_widevine_create_session(handle, toBytes(initSpan), toSessionType(sessionType), toInitDataType(initDataType), &messageType, &sessionBuffer, &messageBuffer);
-        if (status != SCARLET_WIDEVINE_OK) {
-            callback(SharedBuffer::create(), emptyString(), false, Failed);
-            return;
-        }
-
-        String sessionId = String::fromUTF8(std::span { sessionBuffer.data, sessionBuffer.length });
-        Ref<SharedBuffer> message = SharedBuffer::create(std::span { messageBuffer.data, messageBuffer.length });
-        scarlet_widevine_buffer_free(sessionBuffer);
-        scarlet_widevine_buffer_free(messageBuffer);
-
-        m_sessionId = sessionId;
-        const bool needsIndividualization = messageType == 3;
-        callback(WTF::move(message), sessionId, needsIndividualization, Succeeded);
+        auto dataType = toInitDataType(initDataType);
+        m_connection->dispatch([dataType, initData = WTF::move(initData),
+            completion = [protectedThis = Ref { *this }, callback = WTF::move(callback)](int32_t status, uint32_t messageType, ScarletWidevineBuffer session, ScarletWidevineBuffer message) mutable {
+                auto sessionId = String::fromUTF8(std::span { session.data, session.length });
+                auto buffer = SharedBuffer::create(std::span<const uint8_t> { message.data, message.length });
+                cdm_host_buffer_free(session);
+                cdm_host_buffer_free(message);
+                if (status != SCARLET_WIDEVINE_OK || sessionId.isEmpty()) {
+                    callback(SharedBuffer::create(), emptyString(), false, Failed);
+                    return;
+                }
+                protectedThis->m_sessionId = sessionId;
+                callback(WTF::move(buffer), sessionId, messageType == 3, Succeeded);
+            }](ScarletCDMConnection& connection) mutable {
+            uint32_t messageType = 0;
+            ScarletWidevineBuffer session { nullptr, 0 };
+            ScarletWidevineBuffer message { nullptr, 0 };
+            auto status = connection.handle() ? cdm_host_create_session(connection.handle(), toBytes(initData->span()), SCARLET_WIDEVINE_SESSION_TEMPORARY, dataType, &messageType, &session, &message) : SCARLET_WIDEVINE_ERROR;
+            connection.reply([completion = WTF::move(completion), status, messageType, session, message]() mutable {
+                completion(status, messageType, session, message);
+            });
+        });
     }
 
     void updateLicense(const String& sessionId, LicenseType, Ref<SharedBuffer>&& response, LicenseUpdateCallback&& callback) final
     {
-        RefPtr<CDMInstanceScarlet> instance = m_instance.get();
-        auto* handle = instance ? instance->handle() : nullptr;
-        if (!handle) {
-            callback(false, std::nullopt, std::nullopt, std::nullopt, Failed);
-            return;
-        }
-
-        auto sessionUtf8 = sessionId.utf8();
-        auto responseSpan = response->span();
-        ScarletWidevineBuffer keysBuffer { nullptr, 0 };
-        const auto status = scarlet_widevine_update_session(handle, toBytes(sessionUtf8), toBytes(responseSpan), &keysBuffer);
-        if (status != SCARLET_WIDEVINE_OK) {
-            callback(false, std::nullopt, std::nullopt, std::nullopt, Failed);
-            return;
-        }
-
-        auto keys = decodeKeyStatuses(keysBuffer);
-        scarlet_widevine_buffer_free(keysBuffer);
-        callback(false, WTF::move(keys), std::nullopt, std::nullopt, Succeeded);
+        m_connection->dispatch([session = sessionId.utf8(), response = WTF::move(response),
+            completion = [protectedThis = Ref { *this }, callback = WTF::move(callback)](int32_t status, ScarletWidevineBuffer keys) mutable {
+                auto changedKeys = decodeKeyStatuses(keys);
+                cdm_host_buffer_free(keys);
+                if (status != SCARLET_WIDEVINE_OK) {
+                    callback(false, std::nullopt, std::nullopt, std::nullopt, Failed);
+                    return;
+                }
+                callback(false, WTF::move(changedKeys), std::nullopt, std::nullopt, Succeeded);
+            }](ScarletCDMConnection& connection) mutable {
+            ScarletWidevineBuffer keys { nullptr, 0 };
+            auto status = connection.handle() ? cdm_host_update_session(connection.handle(), toBytes(session), toBytes(response->span()), &keys) : SCARLET_WIDEVINE_ERROR;
+            connection.reply([completion = WTF::move(completion), status, keys]() mutable { completion(status, keys); });
+        });
     }
 
     void loadSession(LicenseType, const String&, const String&, LoadSessionCallback&& callback) final
@@ -240,55 +252,63 @@ public:
 
     void closeSession(const String& sessionId, CloseSessionCallback&& callback) final
     {
-        RefPtr<CDMInstanceScarlet> instance = m_instance.get();
-        auto* handle = instance ? instance->handle() : nullptr;
-        if (handle) {
-            auto sessionUtf8 = sessionId.utf8();
-            scarlet_widevine_close_session(handle, toBytes(sessionUtf8));
-        }
-        m_sessionId = String();
-        callback();
+        m_connection->dispatch([session = sessionId.utf8(),
+            completion = [protectedThis = Ref { *this }, callback = WTF::move(callback)]() mutable {
+                protectedThis->m_sessionId = String();
+                callback();
+            }](ScarletCDMConnection& connection) mutable {
+            if (connection.handle())
+                cdm_host_close_session(connection.handle(), toBytes(session));
+            connection.reply(WTF::move(completion));
+        });
     }
 
     void removeSessionData(const String&, LicenseType, RemoveSessionDataCallback&& callback) final
     {
-        callback({ }, nullptr, Succeeded);
+        callback({ }, nullptr, Failed);
     }
 
     void storeRecordOfKeyUsage(const String&) final { }
 
 private:
-    explicit CDMInstanceSessionScarlet(CDMInstanceScarlet& instance)
-        : m_instance(instance)
+    explicit CDMInstanceSessionScarlet(ScarletCDMConnection& connection)
+        : m_connection(connection)
     {
     }
 
-    WeakPtr<CDMInstanceScarlet> m_instance;
+    Ref<ScarletCDMConnection> m_connection;
     WeakPtr<CDMInstanceSessionClient> m_client;
     String m_sessionId;
 };
 
-RefPtr<CDMInstanceSession> CDMInstanceScarlet::createSession()
-{
-    return CDMInstanceSessionScarlet::create(*this);
-}
-
-void CDMInstanceScarlet::initializeWithConfiguration(const CDMKeySystemConfiguration&, AllowDistinctiveIdentifiers allowDistinctiveIdentifiers, AllowPersistentState allowPersistentState, SuccessCallback&& callback)
-{
-    auto* scarletHandle = handle();
-    if (!scarletHandle) {
-        callback(SuccessValue::Failed);
-        return;
+class CDMInstanceScarlet final : public CDMInstance {
+    WTF_MAKE_TZONE_ALLOCATED_INLINE(CDMInstanceScarlet);
+public:
+    static Ref<CDMInstanceScarlet> create() { return adoptRef(*new CDMInstanceScarlet); }
+    ImplementationType implementationType() const final { return ImplementationType::Scarlet; }
+    void initializeWithConfiguration(const CDMKeySystemConfiguration&, AllowDistinctiveIdentifiers identifiers, AllowPersistentState persistent, SuccessCallback&& callback) final
+    {
+        if (identifiers == AllowDistinctiveIdentifiers::Yes || persistent == AllowPersistentState::Yes) {
+            callback(SuccessValue::Failed);
+            return;
+        }
+        m_connection->dispatch([callback = WTF::move(callback)](ScarletCDMConnection& connection) mutable {
+            bool success = connection.initialize();
+            connection.reply([callback = WTF::move(callback), success]() mutable {
+                callback(success ? SuccessValue::Succeeded : SuccessValue::Failed);
+            });
+        });
     }
+    void setServerCertificate(Ref<SharedBuffer>&&, SuccessCallback&& callback) final { callback(SuccessValue::Failed); }
+    void setStorageDirectory(const String&) final { }
+    const String& keySystem() const final { return m_keySystem; }
+    RefPtr<CDMInstanceSession> createSession() final { return CDMInstanceSessionScarlet::create(m_connection.get()); }
 
-    const uint32_t distinctive = allowDistinctiveIdentifiers == AllowDistinctiveIdentifiers::Yes ? 1 : 0;
-    const uint32_t persistent = allowPersistentState == AllowPersistentState::Yes ? 1 : 0;
-    if (scarlet_widevine_initialize(scarletHandle, distinctive, persistent, 0) != SCARLET_WIDEVINE_OK) {
-        callback(SuccessValue::Failed);
-        return;
-    }
-    callback(SuccessValue::Succeeded);
-}
+private:
+    CDMInstanceScarlet() = default;
+    Ref<ScarletCDMConnection> m_connection { ScarletCDMConnection::create() };
+    String m_keySystem { "com.widevine.alpha"_s };
+};
 
 class CDMPrivateScarlet final : public CDMPrivate {
 public:
@@ -299,8 +319,13 @@ public:
 
     bool supportsConfiguration(const CDMKeySystemConfiguration& configuration) const final
     {
+        auto supportedScheme = [](const auto& capability) {
+            return !capability.encryptionScheme || *capability.encryptionScheme == CDMEncryptionScheme::cenc;
+        };
         return configuration.distinctiveIdentifier != CDMRequirement::Required
-            && configuration.persistentState != CDMRequirement::Required;
+            && configuration.persistentState != CDMRequirement::Required
+            && std::ranges::all_of(configuration.audioCapabilities, supportedScheme)
+            && std::ranges::all_of(configuration.videoCapabilities, supportedScheme);
     }
 
     bool supportsConfigurationWithRestrictions(const CDMKeySystemConfiguration& configuration, const CDMRestrictions& restrictions) const final
@@ -321,7 +346,7 @@ public:
 
     Vector<String> supportedRobustnesses() const final
     {
-        return { emptyString() };
+        return { emptyString(), "SW_SECURE_CRYPTO"_s, "SW_SECURE_DECODE"_s };
     }
 
     CDMRequirement distinctiveIdentifiersRequirement(const CDMKeySystemConfiguration&, const CDMRestrictions&) const final
@@ -388,10 +413,11 @@ public:
 
     bool supportsKeySystem(const String& keySystem) final
     {
-        return equalLettersIgnoringASCIICase(keySystem, "com.widevine.alpha"_s);
+        return keySystem == "com.widevine.alpha"_s;
     }
 
 private:
+    friend class NeverDestroyed<CDMFactoryScarlet>;
     CDMFactoryScarlet() = default;
     ~CDMFactoryScarlet() = default;
 };
