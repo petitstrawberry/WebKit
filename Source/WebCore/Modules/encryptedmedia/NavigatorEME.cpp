@@ -81,6 +81,11 @@ inline void infoLog(Logger&, const Arguments&...)
 
 static void tryNextSupportedConfiguration(Document&, RefPtr<CDM>&&, Vector<MediaKeySystemConfiguration>&&, RefPtr<DeferredPromise>&&, Ref<Logger>&&, Logger::LogSiteIdentifier&&);
 
+static bool traceScarletEME()
+{
+    return std::getenv("SCARLET_WEBVIEW_PROFILE") || std::getenv("SCARLET_EME_TRACE");
+}
+
 void NavigatorEME::requestMediaKeySystemAccess(Navigator& navigator, Document& document, const String& keySystem, Vector<MediaKeySystemConfiguration>&& supportedConfigurations, Ref<DeferredPromise>&& promise)
 {
     // https://w3c.github.io/encrypted-media/#dom-navigator-requestmediakeysystemaccess
@@ -90,7 +95,7 @@ void NavigatorEME::requestMediaKeySystemAccess(Navigator& navigator, Document& d
 
     infoLog(logger, identifier, "keySystem(", keySystem, "), supportedConfigurations(", supportedConfigurations, ")");
 
-    if (std::getenv("SCARLET_WEBVIEW_PROFILE")) {
+    if (traceScarletEME()) {
         for (auto& configuration : supportedConfigurations) {
             std::fprintf(stderr, "SCARLET_EME_REQUEST keySystem=%s identifier=%u persistent=%u sessions=%zu\n", reinterpret_cast<const char*>(keySystem.utf8().data()), static_cast<unsigned>(configuration.distinctiveIdentifier), static_cast<unsigned>(configuration.persistentState), configuration.sessionTypes.size());
             for (auto& type : configuration.initDataTypes)
@@ -128,6 +133,8 @@ void NavigatorEME::requestMediaKeySystemAccess(Navigator& navigator, Document& d
             // 6.1. If keySystem is not one of the Key Systems supported by the user agent, reject promise with a NotSupportedError.
             //      String comparison is case-sensitive.
             if (!CDM::supportsKeySystem(keySystem)) {
+                if (traceScarletEME())
+                    std::fprintf(stderr, "SCARLET_EME_RESULT supported=0 reason=key-system\n");
                 infoLog(logger, identifier, "Rejected: keySystem(", keySystem, ") not supported");
                 if (promise)
                     promise->reject(ExceptionCode::NotSupportedError);
@@ -164,6 +171,8 @@ static void tryNextSupportedConfiguration(Document& document, RefPtr<CDM>&& impl
 
             // 6.3.3. If supported configuration is not NotSupported, run the following steps:
             if (supportedConfiguration) {
+                if (traceScarletEME())
+                    std::fprintf(stderr, "SCARLET_EME_RESULT supported=1\n");
                 // 6.3.3.1. Let access be a new MediaKeySystemAccess object, and initialize it as follows:
                 // 6.3.3.1.1. Set the keySystem attribute to keySystem.
                 // 6.3.3.1.2. Let the configuration value be supported configuration.
@@ -187,6 +196,8 @@ static void tryNextSupportedConfiguration(Document& document, RefPtr<CDM>&& impl
     }
 
     // 6.4. Reject promise with a NotSupportedError.
+    if (traceScarletEME())
+        std::fprintf(stderr, "SCARLET_EME_RESULT supported=0 reason=configuration\n");
     infoLog(logger, identifier, "Rejected: empty supportedConfigurations");
     if (promise)
         promise->reject(ExceptionCode::NotSupportedError);
