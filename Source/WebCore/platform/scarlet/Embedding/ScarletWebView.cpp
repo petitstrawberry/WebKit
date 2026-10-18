@@ -38,9 +38,14 @@
 #endif
 #include "EmptyClients.h"
 #include "EventHandler.h"
+#include "AbortSignal.h"
+#include "EventListener.h"
 #include "EventNames.h"
 #include "EventTargetInlines.h"
+#include "DOMRect.h"
+#include "HTMLCanvasElement.h"
 #include "HitTestResult.h"
+#include "MouseEvent.h"
 #include "NodeDocument.h"
 #include "FocusController.h"
 #include "FrameLoadRequest.h"
@@ -1499,6 +1504,35 @@ extern "C" int32_t scarlet_webview_state(ScarletWebView* view, SWVState* out)
     return SWV_OK;
 }
 
+// Installed only around diagnostic mouse dispatch. Observe WebCore's actual
+// DOM event without changing propagation, cancelling it or inspecting content.
+class ScarletInputTraceListener final : public EventListener {
+public:
+    ScarletInputTraceListener() : EventListener(CPPEventListenerType) { }
+
+private:
+    void handleEvent(ScriptExecutionContext&, Event& event) final
+    {
+        auto* mouse = dynamicDowncast<MouseEvent>(event);
+        RefPtr node = dynamicDowncast<Node>(event.target());
+        if (!mouse || !node)
+            return;
+        auto name = node->nodeName().utf8();
+        auto type = event.type().string().utf8();
+        auto* canvas = dynamicDowncast<HTMLCanvasElement>(*node);
+        RefPtr rect = canvas ? canvas->getBoundingClientRect().ptr() : nullptr;
+        std::array<char, 512> message;
+        int length = std::snprintf(message.data(), message.size(), "SCARLET_WEBVIEW_DOM_MOUSE type=%s target=%s trusted=%u button=%d buttons=%u detail=%d client=%d,%d offset=%d,%d canvas=%u,%u rect=%d,%d,%d,%d\n",
+            reinterpret_cast<const char*>(type.data()), reinterpret_cast<const char*>(name.data()), event.isTrusted(), mouse->button(), mouse->buttons(), mouse->detail(),
+            static_cast<int>(mouse->clientX()), static_cast<int>(mouse->clientY()), static_cast<int>(mouse->offsetX()), static_cast<int>(mouse->offsetY()),
+            canvas ? canvas->width() : 0, canvas ? canvas->height() : 0,
+            rect ? static_cast<int>(rect->x()) : 0, rect ? static_cast<int>(rect->y()) : 0,
+            rect ? static_cast<int>(rect->width()) : 0, rect ? static_cast<int>(rect->height()) : 0);
+        if (length > 0)
+            std::fwrite(message.data(), 1, std::min(static_cast<size_t>(length), message.size() - 1), stderr);
+    }
+};
+
 extern "C" int32_t scarlet_webview_mouse(ScarletWebView* view, const SWVMouseEvent* input, uint32_t* handled)
 {
     if (handled) *handled = 0;
@@ -1534,11 +1568,27 @@ extern "C" int32_t scarlet_webview_mouse(ScarletWebView* view, const SWVMouseEve
     // input must use Page's coalescing scheduler rather than force animation
     // callbacks and the complete rendering lifecycle on every mouse sample.
     auto& handler = view->frame->eventHandler();
+    static const bool traceInput = std::getenv("SCARLET_WEBVIEW_INPUT_TRACE");
+    RefPtr<Document> traceDocument;
+    RefPtr<ScarletInputTraceListener> traceListener;
+    if (traceInput && input->kind != SWV_MOUSE_MOVE && view->frame->view()) {
+        auto hit = handler.hitTestResultAtPoint(LayoutPoint { view->frame->view()->windowToContents(position) },
+            { HitTestRequest::Type::ReadOnly, HitTestRequest::Type::AllowChildFrameContent });
+        if (RefPtr node = hit.innerNode()) {
+            traceDocument = &node->document();
+            traceListener = adoptRef(*new ScarletInputTraceListener);
+            for (auto& type : { eventNames().mousedownEvent, eventNames().mouseupEvent, eventNames().clickEvent })
+                traceDocument->addEventListener(type, Ref { *traceListener }, { { true }, true, false, nullptr, true });
+        }
+    }
     auto result = input->kind == SWV_MOUSE_MOVE ? handler.mouseMoved(event)
         : input->kind == SWV_MOUSE_DOWN ? handler.handleMousePressEvent(event) : handler.handleMouseReleaseEvent(event);
+    if (traceDocument) {
+        for (auto& type : { eventNames().mousedownEvent, eventNames().mouseupEvent, eventNames().clickEvent })
+            traceDocument->removeEventListener(type, *traceListener, { true });
+    }
     view->page->scheduleRenderingUpdate({ RenderingUpdateStep::LayerFlush });
     *handled = result.wasHandled();
-    static const bool traceInput = std::getenv("SCARLET_WEBVIEW_INPUT_TRACE");
     if (traceInput && input->kind != SWV_MOUSE_MOVE && view->frame->view()) {
         auto hit = handler.hitTestResultAtPoint(LayoutPoint { view->frame->view()->windowToContents(position) },
             { HitTestRequest::Type::ReadOnly, HitTestRequest::Type::AllowChildFrameContent });
