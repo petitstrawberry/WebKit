@@ -22,6 +22,7 @@
 #include "BackForwardController.h"
 #include "CommonVM.h"
 #include "Document.h"
+#include "DocumentInlines.h"
 #include "DocumentFullscreen.h"
 #include "DocumentView.h"
 #include "Element.h"
@@ -31,16 +32,20 @@
 #include "HTMLVideoElement.h"
 #include "MediaPlayer.h"
 #include "MediaError.h"
-#include "NodeDocument.h"
 #include "TimeRanges.h"
 #include "HTMLNames.h"
 #include <wtf/JSONValues.h>
 #endif
 #include "EmptyClients.h"
 #include "EventHandler.h"
+#include "EventNames.h"
+#include "EventTargetInlines.h"
+#include "HitTestResult.h"
+#include "NodeDocument.h"
 #include "FocusController.h"
 #include "FrameLoadRequest.h"
 #include "FrameLoader.h"
+#include "FrameDestructionObserverInlines.h"
 #if USE(SKIA)
 #include "GraphicsContextSkia.h"
 #include "PlatformDisplay.h"
@@ -1533,6 +1538,21 @@ extern "C" int32_t scarlet_webview_mouse(ScarletWebView* view, const SWVMouseEve
         : input->kind == SWV_MOUSE_DOWN ? handler.handleMousePressEvent(event) : handler.handleMouseReleaseEvent(event);
     view->page->scheduleRenderingUpdate({ RenderingUpdateStep::LayerFlush });
     *handled = result.wasHandled();
+    static const bool traceInput = std::getenv("SCARLET_WEBVIEW_INPUT_TRACE");
+    if (traceInput && input->kind != SWV_MOUSE_MOVE && view->frame->view()) {
+        auto hit = handler.hitTestResultAtPoint(LayoutPoint { view->frame->view()->windowToContents(position) },
+            { HitTestRequest::Type::ReadOnly, HitTestRequest::Type::AllowChildFrameContent });
+        RefPtr node = hit.innerNode();
+        auto name = (node ? node->nodeName() : "none"_s).utf8();
+        auto* document = node ? &node->document() : nullptr;
+        // Only event routing metadata: never form values, node IDs, URLs or text.
+        std::fprintf(stderr, "SCARLET_WEBVIEW_MOUSE kind=%s x=%.2f y=%.2f buttons=%u handled=%u target=%s subframe=%u click_listener=%u pointer_listener=%u document_click_listener=%u\n",
+            input->kind == SWV_MOUSE_DOWN ? "down" : "up", position.x(), position.y(), view->pressedButtons, *handled,
+            reinterpret_cast<const char*>(name.data()), document && document->frame() != view->frame.get(),
+            node && node->hasEventListeners(eventNames().clickEvent),
+            node && node->hasEventListeners(eventNames().pointerdownEvent),
+            document && document->hasEventListeners(eventNames().clickEvent));
+    }
     return result.remoteUserInputEventData() ? SWV_UNSUPPORTED : SWV_OK;
 }
 
