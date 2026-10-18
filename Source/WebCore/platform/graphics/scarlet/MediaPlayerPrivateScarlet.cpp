@@ -55,7 +55,8 @@ static void profileMediaLifecycle(const char* stage, ScarletMediaSession* sessio
 {
     static const bool enabled = [] {
         auto* value = std::getenv("SCARLET_WEBVIEW_PROFILE");
-        return value && value[0] == '1' && !value[1];
+        auto* emeTrace = std::getenv("SCARLET_EME_TRACE");
+        return (value && value[0] == '1' && !value[1]) || (emeTrace && emeTrace[0] == '1' && !emeTrace[1]);
     }();
     if (!enabled)
         return;

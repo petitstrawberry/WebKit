@@ -11,6 +11,7 @@
 #include "MediaSourcePrivateScarlet.h"
 #include "MediaSampleScarlet.h"
 #include "SharedBuffer.h"
+#include <cstdio>
 #include <wtf/NeverDestroyed.h>
 #include <wtf/Scope.h>
 namespace WebCore {
@@ -97,6 +98,7 @@ void SourceBufferPrivateScarlet::submitInput()
         if (result == SCARLET_MEDIA_AGAIN)
             return;
         if (result != SCARLET_MEDIA_OK) {
+            std::fprintf(stderr, "SCARLET_MEDIA_APPEND_ERROR stage=submit status=%d\n", result);
             finishAppend(false);
             return;
         }
@@ -153,6 +155,7 @@ void SourceBufferPrivateScarlet::poll()
         if (!result)
             break;
         if (result < 0) {
+            std::fprintf(stderr, "SCARLET_MEDIA_APPEND_ERROR stage=poll status=%d\n", result);
             finishAppend(false);
             return;
         }
@@ -178,6 +181,7 @@ void SourceBufferPrivateScarlet::poll()
             }
             --m_outstandingAppends;
         } else {
+            std::fprintf(stderr, "SCARLET_MEDIA_APPEND_ERROR stage=parser event=%u error=%d\n", event.kind, event.error);
             finishAppend(false);
             return;
         }
