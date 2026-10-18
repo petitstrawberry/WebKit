@@ -56,6 +56,7 @@
 #include "SharedBuffer.h"
 #include "SubstituteData.h"
 #include "Widget.h"
+#include <cstdlib>
 #include <wtf/text/AtomString.h>
 
 namespace WebCore {
@@ -488,6 +489,14 @@ void ScarletFrameLoaderClient::setTitle(const StringWithDirection&, const URL&)
 
 String ScarletFrameLoaderClient::userAgent(const URL&) const
 {
+    // Apply a host-selected compatibility identity to both navigator.userAgent
+    // and WebCore's HTTP requests, including child frames. Keep the native
+    // identity unless the embedding explicitly requests an override.
+    if (auto* value = std::getenv("SCARLET_WEBVIEW_USER_AGENT")) {
+        auto userAgent = String::fromUTF8(value);
+        if (!userAgent.isEmpty() && userAgent.length() <= 1024 && !userAgent.contains('\r') && !userAgent.contains('\n'))
+            return userAgent;
+    }
     return "Mozilla/5.0 (Scarlet; AArch64) AppleWebKit/605.1.15 Myrica/0.1"_s;
 }
 
