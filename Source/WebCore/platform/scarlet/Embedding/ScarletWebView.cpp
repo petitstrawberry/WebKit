@@ -1546,12 +1546,15 @@ extern "C" int32_t scarlet_webview_mouse(ScarletWebView* view, const SWVMouseEve
         auto name = (node ? node->nodeName() : "none"_s).utf8();
         auto* document = node ? &node->document() : nullptr;
         // Only event routing metadata: never form values, node IDs, URLs or text.
-        std::fprintf(stderr, "SCARLET_WEBVIEW_MOUSE kind=%s x=%.2f y=%.2f buttons=%u handled=%u target=%s subframe=%u click_listener=%u pointer_listener=%u document_click_listener=%u\n",
-            input->kind == SWV_MOUSE_DOWN ? "down" : "up", position.x(), position.y(), view->pressedButtons, *handled,
+        std::array<char, 512> message;
+        int length = std::snprintf(message.data(), message.size(), "SCARLET_WEBVIEW_MOUSE kind=%s x=%d y=%d buttons=%u handled=%u target=%s subframe=%u click_listener=%u pointer_listener=%u document_click_listener=%u\n",
+            input->kind == SWV_MOUSE_DOWN ? "down" : "up", static_cast<int>(position.x()), static_cast<int>(position.y()), view->pressedButtons, *handled,
             reinterpret_cast<const char*>(name.data()), document && document->frame() != view->frame.get(),
             node && node->hasEventListeners(eventNames().clickEvent),
             node && node->hasEventListeners(eventNames().pointerdownEvent),
             document && document->hasEventListeners(eventNames().clickEvent));
+        if (length > 0)
+            std::fwrite(message.data(), 1, std::min(static_cast<size_t>(length), message.size() - 1), stderr);
     }
     return result.remoteUserInputEventData() ? SWV_UNSUPPORTED : SWV_OK;
 }
