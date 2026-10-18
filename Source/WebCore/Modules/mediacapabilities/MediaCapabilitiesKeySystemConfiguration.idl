@@ -1,0 +1,18 @@
+/*
+ * Copyright (C) 2026 Scarlet contributors.
+ * SPDX-License-Identifier: BSD-2-Clause
+ */
+
+[
+    Conditional=ENCRYPTED_MEDIA,
+    JSGenerateToJSObject,
+    JSGenerateToNativeObject,
+] dictionary MediaCapabilitiesKeySystemConfiguration {
+    required DOMString keySystem;
+    DOMString initDataType = "";
+    MediaKeysRequirement distinctiveIdentifier = "optional";
+    MediaKeysRequirement persistentState = "optional";
+    sequence<MediaKeySessionType> sessionTypes = [];
+    MediaCapabilitiesKeySystemMediaCapability audio;
+    MediaCapabilitiesKeySystemMediaCapability video;
+};

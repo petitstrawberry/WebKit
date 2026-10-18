@@ -496,6 +496,8 @@ set(WebCore_NON_SVG_IDL_FILES
     Modules/mediacapabilities/MediaCapabilitiesEncodingInfo.idl
     Modules/mediacapabilities/MediaCapabilitiesInfo.idl
     Modules/mediacapabilities/MediaConfiguration.idl
+    Modules/mediacapabilities/MediaCapabilitiesKeySystemConfiguration.idl
+    Modules/mediacapabilities/MediaCapabilitiesKeySystemMediaCapability.idl
     Modules/mediacapabilities/MediaDecodingConfiguration.idl
     Modules/mediacapabilities/MediaDecodingType.idl
     Modules/mediacapabilities/MediaEncodingConfiguration.idl

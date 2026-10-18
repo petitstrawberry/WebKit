@@ -28,5 +28,6 @@
     EnabledBySetting=MediaCapabilitiesEnabled,
     JSGenerateToJSObject,
 ] dictionary MediaCapabilitiesDecodingInfo : MediaCapabilitiesInfo {
+    [Conditional=ENCRYPTED_MEDIA] MediaKeySystemAccess? keySystemAccess = null;
     [EnabledBySetting=MediaCapabilitiesExtensionsEnabled] required MediaDecodingConfiguration configuration;
 };

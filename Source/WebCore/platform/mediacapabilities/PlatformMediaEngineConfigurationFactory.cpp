@@ -27,6 +27,10 @@
 
 #include "config.h"
 #include "PlatformMediaEngineConfigurationFactory.h"
+#if PLATFORM(SCARLET)
+#include "ContentType.h"
+#include "MediaPlayer.h"
+#endif
 
 #include "MediaSessionManagerInterface.h"
 #include "PlatformMediaCapabilitiesDecodingInfo.h"
@@ -63,6 +67,26 @@ static MediaEngineFactoryVector defaultFactories()
 #endif
 #if USE(GSTREAMER)
     factories.append({ &createMediaPlayerDecodingConfigurationGStreamer, &createMediaPlayerEncodingConfigurationGStreamer });
+#endif
+#if PLATFORM(SCARLET)
+    factories.append({ [](PlatformMediaDecodingConfiguration&& configuration, PlatformMediaEngineConfigurationFactory::DecodingConfigurationCallback&& callback) {
+        bool supported = configuration.type != PlatformMediaDecodingType::MediaStream;
+        auto supports = [&](const String& contentType) {
+            MediaEngineSupportParameters parameters;
+            parameters.type = ContentType { contentType };
+            parameters.platformType = configuration.type;
+            parameters.allowedMediaContainerTypes = configuration.allowedMediaContainerTypes;
+            parameters.allowedMediaCodecTypes = configuration.allowedMediaCodecTypes;
+            return MediaPlayer::supportsType(parameters) == MediaPlayer::SupportsType::IsSupported;
+        };
+        if (configuration.video)
+            supported &= supports(configuration.video->contentType);
+        if (configuration.audio)
+            supported &= supports(configuration.audio->contentType);
+        // Codec support is known. Smooth/power-efficient playback depends on
+        // resolution and the host backend, so keep those estimates conservative.
+        callback({ { supported, false, false }, WTF::move(configuration) });
+    }, nullptr });
 #endif
     return factories;
 }

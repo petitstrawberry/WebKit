@@ -1,0 +1,13 @@
+/*
+ * Copyright (C) 2026 Scarlet contributors.
+ * SPDX-License-Identifier: BSD-2-Clause
+ */
+
+[
+    Conditional=ENCRYPTED_MEDIA,
+    JSGenerateToJSObject,
+    JSGenerateToNativeObject,
+] dictionary MediaCapabilitiesKeySystemMediaCapability {
+    DOMString robustness = "";
+    MediaKeyEncryptionScheme? encryptionScheme = null;
+};

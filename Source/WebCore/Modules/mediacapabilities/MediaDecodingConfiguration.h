@@ -26,6 +26,9 @@
 #pragma once
 
 #include "MediaConfiguration.h"
+#if ENABLE(ENCRYPTED_MEDIA)
+#include "MediaCapabilitiesKeySystemConfiguration.h"
+#endif
 #include "MediaDecodingType.h"
 #include "PageIdentifier.h"
 #include "PlatformMediaDecodingConfiguration.h"
@@ -34,13 +37,20 @@ namespace WebCore {
 
 struct MediaDecodingConfiguration : MediaConfiguration {
     MediaDecodingType type;
+#if ENABLE(ENCRYPTED_MEDIA)
+    std::optional<MediaCapabilitiesKeySystemConfiguration> keySystemConfiguration;
+#endif
 
     MediaDecodingConfiguration isolatedCopy() const;
 };
 
 inline MediaDecodingConfiguration MediaDecodingConfiguration::isolatedCopy() const
 {
-    return { MediaConfiguration::isolatedCopy(), type };
+    return { MediaConfiguration::isolatedCopy(), type
+#if ENABLE(ENCRYPTED_MEDIA)
+        , keySystemConfiguration ? std::optional { keySystemConfiguration->isolatedCopy() } : std::nullopt
+#endif
+    };
 }
 
 inline PlatformMediaDecodingConfiguration toPlatform(MediaDecodingConfiguration&& value)

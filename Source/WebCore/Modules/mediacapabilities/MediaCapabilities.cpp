@@ -25,6 +25,12 @@
 
 #include "config.h"
 #include "MediaCapabilities.h"
+#if ENABLE(ENCRYPTED_MEDIA)
+#include "JSMediaKeySystemAccess.h"
+#include "LocalDOMWindow.h"
+#include "NavigatorEME.h"
+#include "Navigator.h"
+#endif
 
 #include "ContentType.h"
 #include "DocumentPage.h"
@@ -228,6 +234,55 @@ static void gatherEncodingInfo(Document& document, PlatformMediaEncodingConfigur
     PlatformMediaEngineConfigurationFactory::createEncodingConfiguration(WTF::move(configuration), WTF::move(encodingCallback));
 }
 
+#if ENABLE(ENCRYPTED_MEDIA)
+// Use the same permission request and supported-configuration algorithm as
+// navigator.requestMediaKeySystemAccess; do not infer EME support from codecs.
+static void resolveEncryptedDecodingInfo(ScriptExecutionContext& context, MediaDecodingConfiguration&& configuration, MediaCapabilitiesDecodingInfo&& info, Ref<DeferredPromise>&& promise)
+{
+    auto& keyConfiguration = *configuration.keySystemConfiguration;
+    RefPtr document = dynamicDowncast<Document>(context);
+    if (!context.isSecureContext()) { promise->reject(ExceptionCode::SecurityError); return; }
+    if (!document || !document->window()) { promise->reject(ExceptionCode::InvalidStateError); return; }
+    if (keyConfiguration.keySystem.isEmpty()
+        || (configuration.audio.has_value() != keyConfiguration.audio.has_value())
+        || (configuration.video.has_value() != keyConfiguration.video.has_value())) {
+        promise->reject(ExceptionCode::TypeError);
+        return;
+    }
+    info.configuration = configuration;
+    if (!info.supported) {
+        promise->resolve<IDLDictionary<MediaCapabilitiesDecodingInfo>>(WTF::move(info));
+        return;
+    }
+    MediaKeySystemConfiguration candidate;
+    if (!keyConfiguration.initDataType.isEmpty())
+        candidate.initDataTypes.append(AtomString { keyConfiguration.initDataType });
+    candidate.distinctiveIdentifier = keyConfiguration.distinctiveIdentifier;
+    candidate.persistentState = keyConfiguration.persistentState;
+    candidate.sessionTypes = keyConfiguration.sessionTypes;
+    if (configuration.audio)
+        candidate.audioCapabilities.append({ configuration.audio->contentType, keyConfiguration.audio->robustness, keyConfiguration.audio->encryptionScheme });
+    if (configuration.video)
+        candidate.videoCapabilities.append({ configuration.video->contentType, keyConfiguration.video->robustness, keyConfiguration.video->encryptionScheme });
+    auto* globalObject = promise->globalObject();
+    if (!globalObject)
+        return;
+    JSC::JSLockHolder locker(globalObject->vm());
+    Ref accessPromise = DeferredPromise::create(*globalObject).releaseNonNull();
+    accessPromise->whenSettledWithResult([promise = WTF::move(promise), info = WTF::move(info)](JSDOMGlobalObject* globalObject, bool fulfilled, JSC::JSValue value) mutable {
+        auto* access = fulfilled && globalObject ? JSMediaKeySystemAccess::toWrapped(globalObject->vm(), value) : nullptr;
+        if (access)
+            info.keySystemAccess = access;
+        else
+            info.supported = info.smooth = info.powerEfficient = false;
+        promise->resolve<IDLDictionary<MediaCapabilitiesDecodingInfo>>(WTF::move(info));
+    });
+    Vector<MediaKeySystemConfiguration> candidates;
+    candidates.append(WTF::move(candidate));
+    NavigatorEME::requestMediaKeySystemAccess(document->window()->navigator(), *document, keyConfiguration.keySystem, WTF::move(candidates), WTF::move(accessPromise));
+}
+#endif
+
 void MediaCapabilities::decodingInfo(ScriptExecutionContext& context, MediaDecodingConfiguration&& configuration, Ref<DeferredPromise>&& promise)
 {
     // 2.4 Media Capabilities Interface
@@ -258,8 +313,14 @@ void MediaCapabilities::decodingInfo(ScriptExecutionContext& context, MediaDecod
     // 5. In parallel, run the create a MediaCapabilitiesInfo algorithm with configuration and resolve p with its result.
     // 6. Return p.
 
-    PlatformMediaEngineConfigurationFactory::DecodingConfigurationCallback callback = [promise = WTF::move(promise), context = protect(context)](PlatformMediaCapabilitiesDecodingInfo&& info) mutable {
-        protect(context->eventLoop())->queueTask(TaskSource::MediaElement, [promise = WTF::move(promise), info = WTF::move(info)] mutable {
+    PlatformMediaEngineConfigurationFactory::DecodingConfigurationCallback callback = [promise = WTF::move(promise), context = protect(context), configuration](PlatformMediaCapabilitiesDecodingInfo&& info) mutable {
+        protect(context->eventLoop())->queueTask(TaskSource::MediaElement, [promise = WTF::move(promise), info = WTF::move(info), context, configuration = WTF::move(configuration)] mutable {
+#if ENABLE(ENCRYPTED_MEDIA)
+            if (configuration.keySystemConfiguration) {
+                resolveEncryptedDecodingInfo(context, WTF::move(configuration), fromPlatform(WTF::move(info)), WTF::move(promise));
+                return;
+            }
+#endif
             promise->resolve<IDLDictionary<MediaCapabilitiesDecodingInfo>>(fromPlatform(WTF::move(info)));
         });
     };

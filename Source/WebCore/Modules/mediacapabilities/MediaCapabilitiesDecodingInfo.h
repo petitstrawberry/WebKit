@@ -26,6 +26,9 @@
 #pragma once
 
 #include "MediaCapabilitiesInfo.h"
+#if ENABLE(ENCRYPTED_MEDIA)
+#include "MediaKeySystemAccess.h"
+#endif
 #include "MediaDecodingConfiguration.h"
 #include "PlatformMediaCapabilitiesDecodingInfo.h"
 
@@ -33,6 +36,9 @@ namespace WebCore {
 
 struct MediaCapabilitiesDecodingInfo : MediaCapabilitiesInfo {
     MediaDecodingConfiguration configuration;
+#if ENABLE(ENCRYPTED_MEDIA)
+    RefPtr<MediaKeySystemAccess> keySystemAccess;
+#endif
 
     MediaCapabilitiesDecodingInfo isolatedCopy() const;
 };

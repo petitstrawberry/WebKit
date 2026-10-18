@@ -30,6 +30,5 @@
     JSGenerateToNativeObject,
 ] dictionary MediaDecodingConfiguration : MediaConfiguration {
   required MediaDecodingType type;
-  // FIXME: Add support for `keySystemConfiguration`.
-  // MediaCapabilitiesKeySystemConfiguration keySystemConfiguration;
+  [Conditional=ENCRYPTED_MEDIA] MediaCapabilitiesKeySystemConfiguration keySystemConfiguration;
 };
