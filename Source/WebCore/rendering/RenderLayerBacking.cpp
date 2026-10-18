@@ -3903,7 +3903,7 @@ bool RenderLayerBacking::containsPaintedContent(PaintedContentsInfo& contentsInf
         return m_owningLayer.hasVisibleBoxDecorationsOrBackground() || (!(renderVideo->supportsAcceleratedRendering()) && m_requiresOwnBackingStore);
 #endif
 
-#if ENABLE(WEBGL) || ENABLE(OFFSCREEN_CANVAS)
+#if ENABLE(WEBGL) || ENABLE(OFFSCREEN_CANVAS) || USE(SKIA)
     if (is<RenderHTMLCanvas>(renderer()) && canvasCompositingStrategy(renderer()) == CanvasAsLayerContents)
         return m_owningLayer.hasVisibleBoxDecorationsOrBackground();
 #endif
@@ -4063,7 +4063,7 @@ void RenderLayerBacking::contentChanged(ContentChangeType changeType, const std:
     if ((changeType == ContentChangeType::MaskImage) && m_maskLayer)
         m_owningLayer.setNeedsCompositingConfigurationUpdate();
 
-#if ENABLE(WEBGL) || ENABLE(OFFSCREEN_CANVAS)
+#if ENABLE(WEBGL) || ENABLE(OFFSCREEN_CANVAS) || USE(SKIA)
     if ((changeType == ContentChangeType::Canvas || changeType == ContentChangeType::CanvasPixels) && renderer().isRenderHTMLCanvas() && canvasCompositingStrategy(renderer()) == CanvasAsLayerContents) {
         if (changeType == ContentChangeType::Canvas)
             compositor().scheduleCompositingLayerUpdate();
