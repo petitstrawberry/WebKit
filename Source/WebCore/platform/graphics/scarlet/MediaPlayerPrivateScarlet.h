@@ -17,6 +17,7 @@
 #include <wtf/MonotonicTime.h>
 namespace WebCore {
 class MediaSourcePrivateScarlet;
+class CDMInstance;
 class ScarletMediaResourceClient;
 class MediaPlayerPrivateScarlet final
     : public MediaPlayerPrivateInterface
@@ -84,6 +85,13 @@ public:
     void stopVideoFrameMetadataGathering() final { m_gatheringVideoFrameMetadata = false; m_videoFrameMetadata.reset(); }
     String engineDescription() const final { return "Scarlet native media / Skia Vulkan"_s; }
 
+#if ENABLE(ENCRYPTED_MEDIA)
+    void cdmInstanceAttached(CDMInstance&) final;
+    void cdmInstanceDetached(CDMInstance&) final;
+    void attemptToDecryptWithInstance(CDMInstance&) final;
+    bool waitingForKey() const final { return statusSnapshot().waiting_for_key; }
+#endif
+    void initializationDataEncountered(std::span<const uint8_t>);
     bool configureTrack(const ScarletMediaTrack&);
     bool enqueueSample(const MediaSampleScarlet&);
     bool hasCapacity(TrackID) const;
@@ -120,6 +128,9 @@ private:
     ThreadSafeWeakPtr<MediaPlayer> m_player;
     RunLoop::Timer m_timer;
     ScarletMediaSession* m_session { nullptr };
+#if ENABLE(ENCRYPTED_MEDIA)
+    RefPtr<CDMInstance> m_cdmInstance;
+#endif
     ScarletMediaParser* m_parser { nullptr };
     RefPtr<PlatformMediaResource> m_resource;
     RefPtr<NativeImage> m_image;

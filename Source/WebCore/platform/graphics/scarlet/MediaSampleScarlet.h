@@ -18,7 +18,7 @@ public:
     MediaTime decodeTime() const final { return { m_sample.decode_us, 1000000 }; }
     MediaTime duration() const final { return { m_sample.duration_us, 1000000 }; }
     TrackID trackID() const final { return m_sample.track; }
-    size_t sizeInBytes() const final { return m_data.size(); }
+    size_t sizeInBytes() const final { return m_data.size() + m_encryption.size(); }
     FloatSize presentationSize() const final { return m_size; }
     void offsetTimestampsBy(const MediaTime& offset) final
     {
@@ -62,6 +62,8 @@ public:
         auto sample = m_sample;
         sample.data = m_data.span().data();
         sample.size = m_data.size();
+        sample.encryption = m_encryption.span().data();
+        sample.encryption_size = m_encryption.size();
         return sample;
     }
 private:
@@ -70,10 +72,13 @@ private:
     {
         m_data.append(std::span { sample.data, sample.size });
         m_sample.data = nullptr;
+        m_encryption.append(std::span { sample.encryption, sample.encryption_size });
+        m_sample.encryption = nullptr;
     }
     ScarletMediaSample m_sample;
     FloatSize m_size;
     Vector<uint8_t> m_data;
+    Vector<uint8_t> m_encryption;
 };
 }
 SPECIALIZE_TYPE_TRAITS_BEGIN(WebCore::MediaSampleScarlet)

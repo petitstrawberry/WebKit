@@ -89,6 +89,8 @@ void cdm_host_buffer_free(ScarletWidevineBuffer);
 
 namespace WebCore {
 class Page;
+class CDMInstance;
+ScarletWidevineHandle* scarletCDMHandle(CDMInstance&);
 void provideScarletMediaKeySystemTo(Page&);
 }
 #endif

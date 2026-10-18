@@ -8,6 +8,11 @@
 #include "ContentType.h"
 #include "GraphicsContext.h"
 #include "MediaPlayer.h"
+#if ENABLE(ENCRYPTED_MEDIA)
+#include "CDMInstance.h"
+#include "ScarletWidevine.h"
+#include <JavaScriptCore/ArrayBuffer.h>
+#endif
 #include "PlatformDisplay.h"
 #include "ResourceRequest.h"
 #include "ResourceResponse.h"
@@ -225,6 +230,10 @@ void MediaPlayerPrivateScarlet::load(const URL& url, const LoadOptions&)
 {
     cancelLoad();
     m_session = scarlet_media_session_create();
+#if ENABLE(ENCRYPTED_MEDIA)
+    if (m_session && m_cdmInstance)
+        scarlet_media_session_set_cdm(m_session, scarletCDMHandle(*m_cdmInstance));
+#endif
     if (!m_session) {
         fail(MediaPlayer::NetworkState::DecodeError);
         return;
@@ -424,6 +433,39 @@ void MediaPlayerPrivateScarlet::pumpInput()
     }
 }
 
+#if ENABLE(ENCRYPTED_MEDIA)
+void MediaPlayerPrivateScarlet::cdmInstanceAttached(CDMInstance& instance)
+{
+    m_cdmInstance = &instance;
+    if (m_session)
+        scarlet_media_session_set_cdm(m_session, scarletCDMHandle(instance));
+}
+void MediaPlayerPrivateScarlet::cdmInstanceDetached(CDMInstance& instance)
+{
+    if (m_cdmInstance.get() != &instance)
+        return;
+    if (m_session)
+        scarlet_media_session_set_cdm(m_session, nullptr);
+    m_cdmInstance = nullptr;
+}
+void MediaPlayerPrivateScarlet::attemptToDecryptWithInstance(CDMInstance& instance)
+{
+    if (m_cdmInstance.get() == &instance && m_session) {
+        scarlet_media_session_set_cdm(m_session, scarletCDMHandle(instance));
+        wake();
+    }
+}
+#endif
+void MediaPlayerPrivateScarlet::initializationDataEncountered(std::span<const uint8_t> bytes)
+{
+#if ENABLE(ENCRYPTED_MEDIA)
+    if (auto player = m_player.get())
+        player->initializationDataEncountered("cenc"_s, ArrayBuffer::create(bytes));
+#else
+    UNUSED_PARAM(bytes);
+#endif
+}
+
 bool MediaPlayerPrivateScarlet::configureTrack(const ScarletMediaTrack& track)
 {
     if (!m_session || scarlet_media_session_configure(m_session, &track) != SCARLET_MEDIA_OK)
@@ -539,6 +581,8 @@ void MediaPlayerPrivateScarlet::pumpParser()
                 track->value.ranges.add(packet->presentationTime(), packet->presentationEndTime());
             m_packets.append(WTF::move(packet));
             updateBuffered();
+        } else if (event.kind == SCARLET_MEDIA_INITIALIZATION_DATA) {
+            initializationDataEncountered(std::span { event.sample.data, event.sample.size });
         } else if (event.kind == SCARLET_MEDIA_PARSE_ERROR) {
             if (m_networkState != MediaPlayer::NetworkState::DecodeError)
                 profileMediaLifecycle("parser-error", m_session, m_networkState, m_inputBytes,
@@ -610,6 +654,10 @@ void MediaPlayerPrivateScarlet::updateStatus()
     RefPtr player = m_player.get();
     if (!player)
         return;
+#if ENABLE(ENCRYPTED_MEDIA)
+    if (old.waiting_for_key != status.waiting_for_key)
+        player->waitingForKeyChanged();
+#endif
     if (old.ready_state != status.ready_state)
         player->readyStateChanged();
     if (old.duration != status.duration)
@@ -1245,6 +1293,10 @@ void MediaPlayerPrivateScarlet::load(const URL&, const LoadOptions&, MediaSource
 {
     cancelLoad();
     m_session = scarlet_media_session_create();
+#if ENABLE(ENCRYPTED_MEDIA)
+    if (m_session && m_cdmInstance)
+        scarlet_media_session_set_cdm(m_session, scarletCDMHandle(*m_cdmInstance));
+#endif
     if (!m_session) {
         fail(MediaPlayer::NetworkState::DecodeError);
         return;

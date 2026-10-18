@@ -22,7 +22,8 @@ enum ScarletMediaCodec { SCARLET_MEDIA_AVC = 1, SCARLET_MEDIA_AAC = 2 };
 enum ScarletMediaTrackKind { SCARLET_MEDIA_VIDEO = 1, SCARLET_MEDIA_AUDIO = 2 };
 enum ScarletMediaParserEventKind {
     SCARLET_MEDIA_TRACK = 1, SCARLET_MEDIA_SAMPLE = 2,
-    SCARLET_MEDIA_APPEND_DONE = 3, SCARLET_MEDIA_PARSE_ERROR = 4
+    SCARLET_MEDIA_APPEND_DONE = 3, SCARLET_MEDIA_PARSE_ERROR = 4,
+    SCARLET_MEDIA_INITIALIZATION_DATA = 5
 };
 enum ScarletMediaSampleFlags { SCARLET_MEDIA_SYNC = 1, SCARLET_MEDIA_NON_DISPLAYING = 2 };
 enum ScarletMediaPixelFormat { SCARLET_MEDIA_I420 = 1, SCARLET_MEDIA_NV12 = 2 };
@@ -50,6 +51,10 @@ typedef struct {
     uint32_t reserved;
     const uint8_t* data;
     size_t size;
+    /* KID[16], IV size u32 LE, IV, count u32 LE, (clear u32 LE, cipher u32 LE)*.
+     * Empty for clear samples. Owned by the parser event/sample lease. */
+    const uint8_t* encryption;
+    size_t encryption_size;
 } ScarletMediaSample;
 
 typedef struct {
@@ -87,6 +92,7 @@ typedef struct {
     uint32_t ended;
     uint32_t ready_state; /* HTMLMediaElement HAVE_NOTHING .. HAVE_ENOUGH_DATA */
     int32_t error;
+    uint32_t waiting_for_key;
 } ScarletMediaStatus;
 
 /* Capability must describe the actual installed demux/decoder combination.
@@ -104,6 +110,9 @@ int32_t scarlet_media_parser_poll(ScarletMediaParser*, ScarletMediaParserEvent*)
 void scarlet_media_parser_release(ScarletMediaParser*, uint64_t lease);
 
 ScarletMediaSession* scarlet_media_session_create(void);
+/* Retains native shared CDM state synchronously; no IPC on the caller thread. */
+struct ScarletWidevineHandle;
+void scarlet_media_session_set_cdm(ScarletMediaSession*, const struct ScarletWidevineHandle*);
 void scarlet_media_session_destroy(ScarletMediaSession*);
 int32_t scarlet_media_session_configure(ScarletMediaSession*, const ScarletMediaTrack*);
 int32_t scarlet_media_session_enqueue(ScarletMediaSession*, const ScarletMediaSample*);

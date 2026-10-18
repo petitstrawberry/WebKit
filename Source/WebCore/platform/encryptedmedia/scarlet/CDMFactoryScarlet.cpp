@@ -286,6 +286,7 @@ class CDMInstanceScarlet final : public CDMInstance {
 public:
     static Ref<CDMInstanceScarlet> create() { return adoptRef(*new CDMInstanceScarlet); }
     ImplementationType implementationType() const final { return ImplementationType::Scarlet; }
+    ScarletWidevineHandle* mediaHandle() const { return m_connection->handle(); }
     void initializeWithConfiguration(const CDMKeySystemConfiguration&, AllowDistinctiveIdentifiers identifiers, AllowPersistentState persistent, SuccessCallback&& callback) final
     {
         if (identifiers == AllowDistinctiveIdentifiers::Yes || persistent == AllowPersistentState::Yes) {
@@ -309,6 +310,15 @@ private:
     Ref<ScarletCDMConnection> m_connection { ScarletCDMConnection::create() };
     String m_keySystem { "com.widevine.alpha"_s };
 };
+
+ScarletWidevineHandle* scarletCDMHandle(CDMInstance& instance)
+{
+    // MediaKeys is published only after WorkQueue initialization completes.
+    // The native media session clones the shared state before this call returns.
+    if (instance.implementationType() != CDMInstance::ImplementationType::Scarlet)
+        return nullptr;
+    return static_cast<CDMInstanceScarlet&>(instance).mediaHandle();
+}
 
 class CDMPrivateScarlet final : public CDMPrivate {
 public:

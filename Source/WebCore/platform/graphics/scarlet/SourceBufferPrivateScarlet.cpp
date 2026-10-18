@@ -168,6 +168,9 @@ void SourceBufferPrivateScarlet::poll()
             }
             event.sample.track = identifier->value;
             didReceiveSample(MediaSampleScarlet::create(event.sample, m_trackSizes.get(event.sample.track)));
+        } else if (event.kind == SCARLET_MEDIA_INITIALIZATION_DATA) {
+            if (auto nativePlayer = player())
+                nativePlayer->initializationDataEncountered(std::span { event.sample.data, event.sample.size });
         } else if (event.kind == SCARLET_MEDIA_APPEND_DONE) {
             if (!m_outstandingAppends) {
                 finishAppend(false);
